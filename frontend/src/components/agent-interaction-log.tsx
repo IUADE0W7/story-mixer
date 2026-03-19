@@ -37,7 +37,7 @@ export function AgentInteractionLog({ entries }: AgentInteractionLogProps) {
     if (entries.length > 0 && !open) {
       setOpen(true);
     }
-  }, [entries.length > 0]);
+  }, [entries.length, open]);
 
   // Auto-scroll to latest entry
   useEffect(() => {
