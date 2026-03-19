@@ -75,6 +75,9 @@ class AppSettings(BaseSettings):
     ollama_base_url: str = Field(default_factory=_default_ollama_base_url)
     # Logging level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     log_level: str = "INFO"
+    jwt_secret: str
+    jwt_expiry_hours: int = 24
+    rate_limit_per_hour: int = 10
 
 
 settings = AppSettings()
