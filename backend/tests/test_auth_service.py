@@ -52,11 +52,13 @@ def test_verify_token_rejects_expired_token() -> None:
     import jwt as pyjwt
     from datetime import datetime, timedelta, timezone
 
+    from app.config import settings
+
     payload = {
         "user_id": "user-abc",
         "email": "x@y.com",
         "exp": datetime.now(timezone.utc) - timedelta(seconds=1),
     }
-    expired = pyjwt.encode(payload, "test-secret-for-unit-tests-only", algorithm="HS256")
+    expired = pyjwt.encode(payload, settings.jwt_secret, algorithm="HS256")
     with pytest.raises(pyjwt.ExpiredSignatureError):
         verify_token(expired)
