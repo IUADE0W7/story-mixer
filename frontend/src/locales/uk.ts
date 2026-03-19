@@ -1,6 +1,6 @@
 import type en from "./en";
 
-const uk = {
+const uk: typeof en = {
   vibe: {
     briefing: {
       sectionLabel: "Інструкції до історії",
@@ -207,6 +207,6 @@ const uk = {
       returnHome: "На головну",
     },
   },
-} as unknown as typeof en;
+};
 
 export default uk;

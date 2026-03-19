@@ -203,6 +203,6 @@ const en = {
       returnHome: "Return Home",
     },
   },
-} as const;
+};
 
 export default en;
