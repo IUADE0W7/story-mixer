@@ -4,7 +4,7 @@ from app.persistence.models import GenerationRequest, User
 
 def test_user_model_columns() -> None:
     cols = {c.name for c in User.__table__.columns}
-    assert cols == {"id", "email", "password_hash", "created_at"}
+    assert cols == {"id", "email", "google_id", "display_name", "avatar_url", "created_at"}
 
 
 def test_user_email_unique_index() -> None:
