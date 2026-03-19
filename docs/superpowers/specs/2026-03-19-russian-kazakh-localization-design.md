@@ -37,18 +37,51 @@ Add auto-detection in `readStoredLang()`:
 
 Detection order: stored preference → Russian → Kazakh → Ukrainian → English (default).
 
+**Why this order:** Russian is checked before Kazakh because `"ru-KZ"` (Russian as used in Kazakhstan) is a valid browser locale tag that starts with `"ru"`, not `"kk"`. A Kazakh-language user will have `"kk"` or `"kk-KZ"`. Ordering Russian first ensures `"ru-KZ"` maps to Russian, not Kazakh.
+
 ### 4. All four locale files — `vibe.language` section
 
-Add two new keys to every locale file so the language switcher displays language names in each language:
+Add two new keys to every locale file so the language switcher displays language names in each language.
 
+**Edit `frontend/src/locales/en.ts`** — add inside `vibe.language`:
+
+```ts
+russian: "Russian",
+kazakh: "Kazakh",
 ```
-vibe.language.russian   — "Russian" / "Русский" / "Орыс тілі" / "Російська"
-vibe.language.kazakh    — "Kazakh" / "Қазақша" / "Қазақша" / "Казахська"
+
+**Edit `frontend/src/locales/uk.ts`** — add inside `vibe.language`:
+
+```ts
+russian: "Російська",
+kazakh: "Казахська",
+```
+
+**In `ru.ts` (new file)** — include inside `vibe.language`:
+
+```ts
+russian: "Русский",
+kazakh: "Казахский",
+```
+
+**In `kk.ts` (new file)** — include inside `vibe.language`:
+
+```ts
+russian: "Орыс тілі",
+kazakh: "Қазақша",
 ```
 
 ### 5. `frontend/src/components/vibe-controller.tsx`
 
 Add Russian and Kazakh buttons/options to the language selector, following the same pattern as the existing English and Ukrainian options. Use `t("vibe.language.russian")` and `t("vibe.language.kazakh")` for labels, and `lang === "ru"` / `lang === "kk"` for active state.
+
+### 6. Cyrillic detection banner (`cyrillicDetected`)
+
+The existing system shows a banner when Cyrillic text is detected, prompting the user to switch to Ukrainian. With Russian added, a Russian-language user would see "Ukrainian text detected — switch story language?" — which is confusing.
+
+**Decision:** Suppress the Cyrillic detection banner when `lang === "ru"`. Russian users have already opted into a Cyrillic language; the Ukrainian-switch prompt is irrelevant to them.
+
+No equivalent banner is added for Kazakh (Kazakh Cyrillic detection is out of scope).
 
 ---
 
@@ -58,6 +91,7 @@ Add Russian and Kazakh buttons/options to the language selector, following the s
 - URL-based routing (`/ru/`, `/kk/` prefixes)
 - Backend/API error message localization
 - Dynamic `<html lang>` attribute update (pre-existing gap, out of scope)
+- Cyrillic detection prompt for Kazakh
 
 ---
 
@@ -65,4 +99,5 @@ Add Russian and Kazakh buttons/options to the language selector, following the s
 
 - Manually switch to Russian and Kazakh in the UI — verify all labels render in the correct language
 - Set `navigator.language` to `"ru"` or `"kk"` in browser devtools and reload — verify auto-detection
+- Type Cyrillic text with `lang === "ru"` active — verify the Ukrainian detection banner does NOT appear
 - TypeScript compile (`tsc --noEmit`) must pass — the `typeof en` constraint on new locale files catches missing keys
