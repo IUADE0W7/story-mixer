@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add email/password user accounts and a per-user rate limit of 10 story generation requests per hour to LoreForge.
+**Goal:** Add email/password user accounts and a per-user sliding-window rate limit of 10 story generation requests per hour, with matching frontend login/register UI and 429 handling.
 
-**Architecture:** Two new DB tables (`users`, `generation_requests`) managed by Alembic; an `auth_service` for bcrypt + JWT (HS256); a `rate_limit_service` for atomic sliding-window enforcement via `SELECT FOR UPDATE`; a `RateLimitExceeded` exception handled by a custom FastAPI handler; FastAPI dependencies that compose into the existing stories endpoint; a new `AuthModal` frontend component with JWT stored in localStorage.
+**Architecture:** JWT-based auth (HS256) issued on register/login and verified per request via a FastAPI dependency chain (`get_current_user` → `check_rate_limit`). Rate limiting uses a `generation_requests` append-only table with `SELECT FOR UPDATE` to prevent concurrent-request bypass. A custom `RateLimitExceeded` exception + handler produces the exact spec body shape (`{"detail": "...", "retry_after": "..."}`).
 
-**Tech Stack:** PyJWT, bcrypt, SQLAlchemy async, FastAPI Depends(), pytest-asyncio, httpx (test), React 19 + TypeScript, Playwright.
+**Tech Stack:** Python 3.12 + FastAPI + SQLAlchemy async + Alembic + PyJWT + bcrypt; React 19 + Next.js App Router + Tailwind + Radix UI
 
 **Spec:** `docs/superpowers/specs/2026-03-19-user-auth-rate-limiting-design.md`
 
@@ -14,1431 +14,1383 @@
 
 ## File Map
 
-**New (backend)**
-- `backend/app/domain/auth.py` — Pydantic models: `RegisterRequest`, `LoginRequest`, `TokenResponse`
-- `backend/app/services/auth_service.py` — `hash_password`, `verify_password`, `create_access_token`, `decode_access_token`
-- `backend/app/services/rate_limit_service.py` — `check_and_record`, `RateLimitExceeded`
-- `backend/app/api/deps.py` — FastAPI deps: `get_current_user`, `check_rate_limit`
-- `backend/app/api/v1/auth.py` — `POST /auth/register`, `POST /auth/login`
-- `backend/alembic/versions/20260319_0001_add_users_table.py`
-- `backend/alembic/versions/20260319_0002_add_generation_requests_table.py`
+### New files
+| Path | Responsibility |
+|------|---------------|
+| `backend/app/domain/auth.py` | Pydantic I/O models: `RegisterRequest`, `LoginRequest`, `TokenResponse` |
+| `backend/app/services/auth_service.py` | Password hash/verify, JWT issue/verify (pure functions, no DB) |
+| `backend/app/services/rate_limit_service.py` | `check_rate_limit_and_record()` — sliding window count + insert, no transaction management |
+| `backend/app/api/deps.py` | `RateLimitExceeded` exception class; `get_current_user` and `check_rate_limit` FastAPI deps |
+| `backend/app/api/v1/auth.py` | `POST /api/v1/auth/register` and `POST /api/v1/auth/login` |
+| `backend/alembic/versions/20260319_0001_add_users_table.py` | `users` table migration |
+| `backend/alembic/versions/20260319_0002_add_generation_requests_table.py` | `generation_requests` table + composite index |
+| `backend/tests/conftest.py` | Async test DB session + test app client fixtures |
+| `backend/tests/test_auth_domain.py` | Unit tests: password length boundaries, email validation |
+| `backend/tests/test_auth_service.py` | Unit tests: hash, verify, JWT issue/verify/expiry |
+| `backend/tests/test_rate_limit_service.py` | Unit tests: under-limit inserts row, at-limit returns retry_after |
+| `backend/tests/test_auth_integration.py` | Integration: register, login, full flow, rate limit, concurrent requests |
+| `frontend/src/components/auth-modal.tsx` | Login/register modal; stores JWT in localStorage |
 
-**New (tests)**
-- `backend/tests/test_auth_service.py`
-- `backend/tests/test_rate_limit_service.py`
-- `backend/tests/test_auth_endpoints.py`
-- `backend/tests/test_auth_integration.py`
-
-**New (frontend)**
-- `frontend/src/components/auth-modal.tsx`
-
-**Modified**
-- `backend/pyproject.toml` — add `PyJWT[cryptography]`, `bcrypt` to deps; `pytest-asyncio`, `httpx` to dev deps; `asyncio_mode = "auto"` config
-- `backend/app/config.py` — add `jwt_secret`, `jwt_expiry_hours`, `rate_limit_per_hour`
-- `backend/app/persistence/models.py` — add `User`, `GenerationRequest` ORM models
-- `backend/app/main.py` — register auth router, register `RateLimitExceeded` exception handler
-- `backend/app/api/v1/stories.py` — inject `check_rate_limit` dependency
-- `frontend/src/components/use-long-form-stream.tsx` — pass `Authorization` header; handle 401/429
-- `frontend/src/components/vibe-controller.tsx` — show `AuthModal`; display 429 retry message
+### Modified files
+| Path | Change |
+|------|--------|
+| `backend/pyproject.toml` | Add `PyJWT[cryptography]`, `bcrypt`, `email-validator`, `pytest-asyncio`, `httpx` |
+| `backend/app/config.py` | Add `jwt_secret`, `jwt_expiry_hours`, `rate_limit_per_hour` settings |
+| `backend/app/persistence/models.py` | Add `User` and `GenerationRequest` ORM models |
+| `backend/app/main.py` | Register auth router at `/api/v1/auth`; add `RateLimitExceeded` exception handler |
+| `backend/app/api/v1/stories.py` | Add `Depends(check_rate_limit)` to `generate_long_form_story` |
+| `frontend/src/components/use-long-form-stream.tsx` | Add `token` arg, `Authorization` header, surface 429/401 as new `StreamStatus` codes |
+| `frontend/src/components/vibe-controller.tsx` | Show `AuthModal` when unauthenticated; display 429 retry message |
 
 ---
 
-## Task 1: Add Python dependencies
+## Design notes for implementors
+
+**Why `rate_limit_service.py` does not manage its own transaction:**
+`check_rate_limit_and_record(db, user_id, limit)` assumes the caller has already started a transaction (and the `SELECT FOR UPDATE` lock is active). This keeps the function pure and mockable. The caller (`check_rate_limit` dep) owns the transaction boundary.
+
+**Why `check_rate_limit` uses `session_factory()` directly instead of `Depends(get_session)`:**
+FastAPI caches dependency results within a request. Both `get_current_user` and `check_rate_limit` declare `Depends(get_session)` — they would receive the SAME session instance. If `get_current_user` has already issued a query (triggering SQLAlchemy autobegin), calling `async with db.begin()` on that session raises `InvalidRequestError`. By having `check_rate_limit` call `session_factory()` directly, it gets a fresh session with no prior transaction.
+
+**Why `RateLimitExceeded` is a custom exception (not `HTTPException`):**
+FastAPI wraps `HTTPException.detail` in `{"detail": <value>}`. So `HTTPException(detail={"detail": "...", "retry_after": "..."})` produces `{"detail": {"detail": "...", "retry_after": "..."}}` — nested, not flat. A custom exception handler returns a `JSONResponse` directly, producing the exact spec body: `{"detail": "Rate limit exceeded", "retry_after": "..."}`.
+
+---
+
+## Task 1: Python dependencies
 
 **Files:**
 - Modify: `backend/pyproject.toml`
 
-- [ ] **Step 1: Add packages**
+- [ ] **Step 1: Add new dependencies**
 
-Open `backend/pyproject.toml`. Add runtime packages to `dependencies`:
-
-```toml
+  Open `backend/pyproject.toml` and add to the `dependencies` list:
+  ```toml
   "PyJWT[cryptography]>=2.10.0",
   "bcrypt>=4.3.0",
-```
-
-Add a `[tool.uv.dev-dependencies]` section (or append to it if it already exists) for test-only packages:
-
-```toml
-[tool.uv.dev-dependencies]
-dev = [
-  "pytest-asyncio>=0.25.0",
+  "email-validator>=2.2.0",
   "httpx>=0.28.0",
-]
-```
+  "pytest-asyncio>=0.25.0",
+  ```
 
-Also add pytest-asyncio config so all `async def test_*` functions are collected automatically — add this section:
+- [ ] **Step 2: Install**
 
-```toml
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-```
-
-- [ ] **Step 2: Sync**
-
-```bash
-cd backend && uv sync
-```
-
-Expected: packages installed without errors.
+  ```bash
+  cd backend && ../.venv/bin/pip install "PyJWT[cryptography]>=2.10.0" "bcrypt>=4.3.0" "email-validator>=2.2.0" "httpx>=0.28.0" "pytest-asyncio>=0.25.0"
+  ```
+  Expected: all packages install without errors.
 
 - [ ] **Step 3: Commit**
 
-```bash
-git add backend/pyproject.toml backend/uv.lock
-git commit -m "chore: add PyJWT, bcrypt deps; pytest-asyncio, httpx dev deps"
-```
+  ```bash
+  git add backend/pyproject.toml
+  git commit -m "chore: add PyJWT, bcrypt, email-validator, httpx, pytest-asyncio deps"
+  ```
 
 ---
 
 ## Task 2: Config settings
 
 **Files:**
-- Create: `backend/tests/test_config_auth.py`
 - Modify: `backend/app/config.py`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Write a failing test**
 
-Create `backend/tests/test_config_auth.py`:
+  Create `backend/tests/test_config_auth_settings.py`:
+  ```python
+  """Verify that auth-related settings are declared in AppSettings."""
+  import os
 
-```python
-"""Verify auth settings are present and enforce required jwt_secret."""
-from __future__ import annotations
+  os.environ.setdefault("JWT_SECRET", "test-secret-for-testing-only")
 
-import pytest
-
-
-def test_jwt_expiry_hours_default():
-    from app.config import AppSettings
-    s = AppSettings(jwt_secret="test-secret-for-testing-only-32chars!!")
-    assert s.jwt_expiry_hours == 24
+  from app.config import AppSettings
 
 
-def test_rate_limit_per_hour_default():
-    from app.config import AppSettings
-    s = AppSettings(jwt_secret="test-secret-for-testing-only-32chars!!")
-    assert s.rate_limit_per_hour == 10
+  def test_jwt_secret_field_exists() -> None:
+      assert "jwt_secret" in AppSettings.model_fields
 
 
-def test_jwt_secret_required():
-    from pydantic import ValidationError
-    from app.config import AppSettings
-    with pytest.raises(ValidationError):
-        AppSettings()  # no jwt_secret in env
-```
+  def test_jwt_expiry_hours_defaults_to_24() -> None:
+      from importlib import reload
+      import app.config as cfg
+      reload(cfg)
+      assert cfg.settings.jwt_expiry_hours == 24
 
-- [ ] **Step 2: Run to verify failure**
 
-```bash
-cd backend && ../.venv/bin/pytest tests/test_config_auth.py -v
-```
+  def test_rate_limit_per_hour_defaults_to_10() -> None:
+      from importlib import reload
+      import app.config as cfg
+      reload(cfg)
+      assert cfg.settings.rate_limit_per_hour == 10
+  ```
 
-Expected: `AttributeError` — `jwt_secret` does not exist yet.
+- [ ] **Step 2: Run to confirm it fails**
 
-- [ ] **Step 3: Add settings to `backend/app/config.py`**
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_config_auth_settings.py -v
+  ```
+  Expected: FAIL — `jwt_secret` not in fields.
 
-Add these three fields to `AppSettings`, after `log_level`:
+- [ ] **Step 3: Add settings to AppSettings**
 
-```python
-jwt_secret: str = Field()  # no default — Pydantic raises ValidationError on startup if absent
-jwt_expiry_hours: int = 24
-rate_limit_per_hour: int = 10
-```
+  In `backend/app/config.py`, add to the `AppSettings` class (after `log_level`):
+  ```python
+  jwt_secret: str              # required — no default; Pydantic raises ValidationError on startup if absent
+  jwt_expiry_hours: int = 24
+  rate_limit_per_hour: int = 10
+  ```
 
-- [ ] **Step 4: Run tests to verify pass**
+  > In Pydantic v2, a field with type annotation and no default value is required. `JWT_SECRET` env var must be present at startup.
 
-```bash
-cd backend && ../.venv/bin/pytest tests/test_config_auth.py -v
-```
+- [ ] **Step 4: Run tests to verify they pass**
 
-Expected: 3 passed.
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_config_auth_settings.py -v
+  ```
+  Expected: 3 PASS.
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add backend/app/config.py backend/tests/test_config_auth.py
-git commit -m "feat: add jwt_secret, jwt_expiry_hours, rate_limit_per_hour settings"
-```
+  ```bash
+  git add backend/app/config.py backend/tests/test_config_auth_settings.py
+  git commit -m "feat: add JWT_SECRET, JWT_EXPIRY_HOURS, RATE_LIMIT_PER_HOUR settings"
+  ```
 
 ---
 
-## Task 3: Domain models
+## Task 3: ORM models
 
 **Files:**
-- Create: `backend/tests/test_domain_auth.py`
-- Create: `backend/app/domain/auth.py`
-
-- [ ] **Step 1: Write failing test**
-
-Create `backend/tests/test_domain_auth.py`:
-
-```python
-"""Pydantic validation for auth request/response models."""
-from __future__ import annotations
-
-import os
-import pytest
-from pydantic import ValidationError
-
-os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-xxxxxxxxx")
-
-
-def test_register_request_valid():
-    from app.domain.auth import RegisterRequest
-    r = RegisterRequest(email="user@example.com", password="strongpass1")
-    assert r.email == "user@example.com"
-
-
-def test_register_password_too_short():
-    from app.domain.auth import RegisterRequest
-    with pytest.raises(ValidationError, match="at least 8"):
-        RegisterRequest(email="a@b.com", password="short")
-
-
-def test_register_password_too_long():
-    from app.domain.auth import RegisterRequest
-    with pytest.raises(ValidationError, match="72"):
-        RegisterRequest(email="a@b.com", password="x" * 73)
-
-
-def test_register_password_max_boundary_ok():
-    from app.domain.auth import RegisterRequest
-    RegisterRequest(email="a@b.com", password="x" * 72)  # must not raise
-
-
-def test_register_invalid_email():
-    from app.domain.auth import RegisterRequest
-    with pytest.raises(ValidationError):
-        RegisterRequest(email="not-an-email", password="validpass1")
-
-
-def test_token_response_shape():
-    from app.domain.auth import TokenResponse
-    t = TokenResponse(access_token="abc.def.ghi", token_type="bearer")
-    assert t.token_type == "bearer"
-```
-
-- [ ] **Step 2: Run to verify failure**
-
-```bash
-cd backend && ../.venv/bin/pytest tests/test_domain_auth.py -v
-```
-
-Expected: `ModuleNotFoundError`.
-
-- [ ] **Step 3: Create `backend/app/domain/auth.py`**
-
-```python
-"""Pydantic models for authentication request and response contracts."""
-
-from __future__ import annotations
-
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
-
-
-class RegisterRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    email: EmailStr
-    password: str = Field(
-        min_length=8,
-        max_length=72,
-        description=(
-            "8–72 characters. 72 is bcrypt's effective input limit; "
-            "longer passwords are actively rejected to prevent silent truncation."
-        ),
-    )
-
-
-class LoginRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    email: EmailStr
-    password: str
-
-
-class TokenResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    access_token: str
-    token_type: str = "bearer"
-```
-
-- [ ] **Step 4: Install `email-validator` (required for `EmailStr`)**
-
-```bash
-cd backend && uv add "email-validator>=2.2.0"
-```
-
-- [ ] **Step 5: Run tests to verify pass**
-
-```bash
-cd backend && ../.venv/bin/pytest tests/test_domain_auth.py -v
-```
-
-Expected: 6 passed.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add backend/app/domain/auth.py backend/tests/test_domain_auth.py backend/pyproject.toml backend/uv.lock
-git commit -m "feat: add auth domain models with password length validation"
-```
-
----
-
-## Task 4: ORM models
-
-**Files:**
-- Create: `backend/tests/test_orm_models.py`
 - Modify: `backend/app/persistence/models.py`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Write a failing test**
 
-Create `backend/tests/test_orm_models.py`:
-
-```python
-"""Verify User and GenerationRequest ORM models have expected columns."""
-from __future__ import annotations
-
-import os
-
-os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-xxxxxxxxx")
+  Create `backend/tests/test_orm_models.py`:
+  ```python
+  """Verify User and GenerationRequest ORM models have expected columns and indexes."""
+  from app.persistence.models import GenerationRequest, User
 
 
-def test_user_model_columns():
-    from app.persistence.models import User
-    cols = {c.name for c in User.__table__.columns}
-    assert cols == {"id", "email", "password_hash", "created_at"}
+  def test_user_model_columns() -> None:
+      cols = {c.name for c in User.__table__.columns}
+      assert cols == {"id", "email", "password_hash", "created_at"}
 
 
-def test_generation_request_model_columns():
-    from app.persistence.models import GenerationRequest
-    cols = {c.name for c in GenerationRequest.__table__.columns}
-    assert cols == {"id", "user_id", "requested_at"}
+  def test_user_email_unique_index() -> None:
+      indexes = {idx.name for idx in User.__table__.indexes}
+      assert any("email" in name for name in indexes)
 
 
-def test_generation_requests_has_composite_index():
-    from app.persistence.models import GenerationRequest
-    index_names = {idx.name for idx in GenerationRequest.__table__.indexes}
-    assert "ix_generation_requests_user_time" in index_names
-```
-
-- [ ] **Step 2: Run to verify failure**
-
-```bash
-cd backend && ../.venv/bin/pytest tests/test_orm_models.py -v
-```
-
-Expected: `ImportError` — `User` and `GenerationRequest` don't exist yet.
-
-- [ ] **Step 3: Add models to `backend/app/persistence/models.py`**
-
-Add these imports after the existing imports at the top of the file:
-
-```python
-import uuid
-from sqlalchemy import ForeignKey, Index, UniqueConstraint
-```
-
-Then append the two new model classes after `StoryRecord`:
-
-```python
-class User(Base):
-    """Registered user account for authentication and rate limiting."""
-
-    __tablename__ = "users"
-
-    id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
-    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
+  def test_generation_request_model_columns() -> None:
+      cols = {c.name for c in GenerationRequest.__table__.columns}
+      assert cols == {"id", "user_id", "requested_at"}
 
 
-class GenerationRequest(Base):
-    """Append-only log of story generation attempts for rate limiting."""
+  def test_generation_request_composite_index() -> None:
+      col_sets = [
+          {c.name for c in idx.columns}
+          for idx in GenerationRequest.__table__.indexes
+      ]
+      assert {"user_id", "requested_at"} in col_sets
+  ```
 
-    __tablename__ = "generation_requests"
+- [ ] **Step 2: Run to confirm it fails**
 
-    id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
-    )
-    requested_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_orm_models.py -v
+  ```
+  Expected: FAIL — `User` not importable.
 
-    __table_args__ = (
-        Index("ix_generation_requests_user_time", "user_id", "requested_at"),
-    )
-```
+- [ ] **Step 3: Add ORM models**
 
-Note: IDs are stored as `Text` (UUID strings). Do NOT add a `UUID` dialect import — `Text` is used consistently throughout this codebase (see `StoryRecord`).
+  In `backend/app/persistence/models.py`, add these imports alongside the existing ones at the top:
+  ```python
+  import uuid
+  from sqlalchemy import ForeignKey, Index
+  ```
 
-- [ ] **Step 4: Run tests to verify pass**
+  Then add after the existing `StoryRecord` class:
+  ```python
+  class User(Base):
+      """Registered LoreForge user with bcrypt-hashed password."""
 
-```bash
-cd backend && ../.venv/bin/pytest tests/test_orm_models.py -v
-```
+      __tablename__ = "users"
 
-Expected: 3 passed.
+      id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
+      email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+      password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+      created_at: Mapped[datetime] = mapped_column(
+          DateTime(timezone=True), nullable=False, server_default=func.now()
+      )
+
+      __table_args__ = (Index("ix_users_email", "email", unique=True),)
+
+
+  class GenerationRequest(Base):
+      """Append-only log of story generation attempts used for per-user rate limiting."""
+
+      __tablename__ = "generation_requests"
+
+      id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
+      user_id: Mapped[str] = mapped_column(
+          Text, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+      )
+      requested_at: Mapped[datetime] = mapped_column(
+          DateTime(timezone=True), nullable=False, server_default=func.now()
+      )
+
+      __table_args__ = (
+          Index("ix_generation_requests_user_id_requested_at", "user_id", "requested_at"),
+      )
+  ```
+
+  > `datetime`, `DateTime`, `Text`, `func`, `Mapped`, `mapped_column` are already imported at the top of `models.py`. Only `uuid`, `ForeignKey`, and `Index` need to be added.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_orm_models.py -v
+  ```
+  Expected: 4 PASS.
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add backend/app/persistence/models.py backend/tests/test_orm_models.py
-git commit -m "feat: add User and GenerationRequest ORM models"
-```
+  ```bash
+  git add backend/app/persistence/models.py backend/tests/test_orm_models.py
+  git commit -m "feat: add User and GenerationRequest ORM models"
+  ```
 
 ---
 
-## Task 5: Alembic migrations
+## Task 4: Alembic migrations
 
 **Files:**
 - Create: `backend/alembic/versions/20260319_0001_add_users_table.py`
 - Create: `backend/alembic/versions/20260319_0002_add_generation_requests_table.py`
 
-- [ ] **Step 1: Create `20260319_0001_add_users_table.py`**
+- [ ] **Step 1: Confirm current head revision**
 
-```python
-"""add users table
+  ```bash
+  cd backend && DATABASE_URL='postgresql+asyncpg://mikha:postgres@127.0.0.1:5432/loreforge' \
+    ../.venv/bin/alembic heads
+  ```
+  Expected: `20260315_0002 (head)`. The first new migration's `down_revision` must match this exactly.
 
-Revision ID: 20260319_0001
-Revises: 20260315_0002
-Create Date: 2026-03-19 00:00:00
-"""
+- [ ] **Step 2: Create users migration**
 
-from __future__ import annotations
+  Create `backend/alembic/versions/20260319_0001_add_users_table.py`:
+  ```python
+  """add users table
 
-import sqlalchemy as sa
-from alembic import op
+  Revision ID: 20260319_0001
+  Revises: 20260315_0002
+  Create Date: 2026-03-19
+  """
+  from __future__ import annotations
 
-revision = "20260319_0001"
-down_revision = "20260315_0002"
-branch_labels = None
-depends_on = None
+  import sqlalchemy as sa
+  from alembic import op
 
-
-def upgrade() -> None:
-    """Create users table with unique email index."""
-
-    op.create_table(
-        "users",
-        sa.Column("id", sa.Text(), nullable=False),
-        sa.Column("email", sa.Text(), nullable=False),
-        sa.Column("password_hash", sa.Text(), nullable=False),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("email", name="uq_users_email"),
-    )
+  revision = "20260319_0001"
+  down_revision = "20260315_0002"
+  branch_labels = None
+  depends_on = None
 
 
-def downgrade() -> None:
-    op.drop_table("users")
-```
-
-- [ ] **Step 2: Create `20260319_0002_add_generation_requests_table.py`**
-
-```python
-"""add generation_requests table
-
-Revision ID: 20260319_0002
-Revises: 20260319_0001
-Create Date: 2026-03-19 00:00:00
-"""
-
-from __future__ import annotations
-
-import sqlalchemy as sa
-from alembic import op
-
-revision = "20260319_0002"
-down_revision = "20260319_0001"
-branch_labels = None
-depends_on = None
+  def upgrade() -> None:
+      op.create_table(
+          "users",
+          sa.Column("id", sa.Text, primary_key=True),
+          sa.Column("email", sa.Text, nullable=False),
+          sa.Column("password_hash", sa.Text, nullable=False),
+          sa.Column(
+              "created_at",
+              sa.DateTime(timezone=True),
+              nullable=False,
+              server_default=sa.text("now()"),
+          ),
+      )
+      op.create_index("ix_users_email", "users", ["email"], unique=True)
 
 
-def upgrade() -> None:
-    """Create generation_requests with composite index for sliding-window queries."""
+  def downgrade() -> None:
+      op.drop_index("ix_users_email", table_name="users")
+      op.drop_table("users")
+  ```
 
-    op.create_table(
-        "generation_requests",
-        sa.Column("id", sa.Text(), nullable=False),
-        sa.Column("user_id", sa.Text(), nullable=False),
-        sa.Column(
-            "requested_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("now()"),
-        ),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="RESTRICT"),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_generation_requests_user_time",
-        "generation_requests",
-        ["user_id", "requested_at"],
-    )
+- [ ] **Step 3: Create generation_requests migration**
+
+  Create `backend/alembic/versions/20260319_0002_add_generation_requests_table.py`:
+  ```python
+  """add generation_requests table
+
+  Revision ID: 20260319_0002
+  Revises: 20260319_0001
+  Create Date: 2026-03-19
+  """
+  from __future__ import annotations
+
+  import sqlalchemy as sa
+  from alembic import op
+
+  revision = "20260319_0002"
+  down_revision = "20260319_0001"
+  branch_labels = None
+  depends_on = None
 
 
-def downgrade() -> None:
-    op.drop_index("ix_generation_requests_user_time", table_name="generation_requests")
-    op.drop_table("generation_requests")
-```
+  def upgrade() -> None:
+      op.create_table(
+          "generation_requests",
+          sa.Column("id", sa.Text, primary_key=True),
+          sa.Column(
+              "user_id",
+              sa.Text,
+              sa.ForeignKey("users.id", ondelete="RESTRICT"),
+              nullable=False,
+          ),
+          sa.Column(
+              "requested_at",
+              sa.DateTime(timezone=True),
+              nullable=False,
+              server_default=sa.text("now()"),
+          ),
+      )
+      op.create_index(
+          "ix_generation_requests_user_id_requested_at",
+          "generation_requests",
+          ["user_id", "requested_at"],
+      )
 
-- [ ] **Step 3: Run migrations**
 
-```bash
-cd backend && DATABASE_URL='postgresql+asyncpg://mikha:postgres@127.0.0.1:5432/loreforge' \
-  ../.venv/bin/alembic upgrade head
-```
+  def downgrade() -> None:
+      op.drop_index(
+          "ix_generation_requests_user_id_requested_at",
+          table_name="generation_requests",
+      )
+      op.drop_table("generation_requests")
+  ```
 
-Expected: both migrations applied with no errors.
+- [ ] **Step 4: Run migrations**
 
-- [ ] **Step 4: Verify tables exist**
+  ```bash
+  cd backend && DATABASE_URL='postgresql+asyncpg://mikha:postgres@127.0.0.1:5432/loreforge' \
+    ../.venv/bin/alembic upgrade head
+  ```
+  Expected: "Running upgrade ... -> 20260319_0001 ... Running upgrade ... -> 20260319_0002"
 
-```bash
-psql -U mikha -d loreforge -c "\dt"
-```
+- [ ] **Step 5: Verify tables exist**
 
-Expected: `users` and `generation_requests` in the list.
+  ```bash
+  PGPASSWORD=postgres psql -U mikha -d loreforge -h 127.0.0.1 -c "\dt"
+  ```
+  Expected: `users` and `generation_requests` listed.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
-```bash
-git add backend/alembic/versions/20260319_0001_add_users_table.py \
-        backend/alembic/versions/20260319_0002_add_generation_requests_table.py
-git commit -m "feat: add Alembic migrations for users and generation_requests tables"
-```
+  ```bash
+  git add backend/alembic/versions/20260319_0001_add_users_table.py \
+          backend/alembic/versions/20260319_0002_add_generation_requests_table.py
+  git commit -m "feat: Alembic migrations for users and generation_requests tables"
+  ```
 
 ---
 
-## Task 6: auth_service
+## Task 5: Domain models (Pydantic)
 
 **Files:**
-- Create: `backend/tests/test_auth_service.py`
+- Create: `backend/app/domain/auth.py`
+- Create: `backend/tests/test_auth_domain.py`
+
+- [ ] **Step 1: Write failing tests**
+
+  Create `backend/tests/test_auth_domain.py`:
+  ```python
+  """Validate RegisterRequest password length and email format enforcement."""
+  import pytest
+  from pydantic import ValidationError
+
+  from app.domain.auth import LoginRequest, RegisterRequest, TokenResponse
+
+
+  def test_register_rejects_7_char_password() -> None:
+      with pytest.raises(ValidationError):
+          RegisterRequest(email="a@b.com", password="1234567")
+
+
+  def test_register_accepts_8_char_password() -> None:
+      req = RegisterRequest(email="a@b.com", password="12345678")
+      assert req.password == "12345678"
+
+
+  def test_register_accepts_72_char_password() -> None:
+      pwd = "a" * 72
+      assert RegisterRequest(email="a@b.com", password=pwd).password == pwd
+
+
+  def test_register_rejects_73_char_password() -> None:
+      with pytest.raises(ValidationError):
+          RegisterRequest(email="a@b.com", password="a" * 73)
+
+
+  def test_register_rejects_invalid_email() -> None:
+      with pytest.raises(ValidationError):
+          RegisterRequest(email="not-an-email", password="validpass")
+
+
+  def test_token_response_default_token_type() -> None:
+      assert TokenResponse(access_token="abc").token_type == "bearer"
+  ```
+
+- [ ] **Step 2: Run to confirm it fails**
+
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_auth_domain.py -v
+  ```
+  Expected: FAIL — `app.domain.auth` not found.
+
+- [ ] **Step 3: Create domain/auth.py**
+
+  Create `backend/app/domain/auth.py`:
+  ```python
+  """Pydantic I/O models for authentication endpoints."""
+
+  from __future__ import annotations
+
+  from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+
+
+  class RegisterRequest(BaseModel):
+      model_config = ConfigDict(extra="forbid", frozen=True)
+
+      email: EmailStr
+      password: str
+
+      @field_validator("password")
+      @classmethod
+      def validate_password_length(cls, v: str) -> str:
+          if len(v) < 8:
+              raise ValueError("Password must be at least 8 characters")
+          if len(v) > 72:
+              # bcrypt silently discards bytes beyond 72 — a 73-char password would
+              # match any 72-char prefix, which is a security defect.
+              raise ValueError("Password must not exceed 72 characters")
+          return v
+
+
+  class LoginRequest(BaseModel):
+      model_config = ConfigDict(extra="forbid", frozen=True)
+
+      email: str
+      password: str
+
+
+  class TokenResponse(BaseModel):
+      model_config = ConfigDict(frozen=True)
+
+      access_token: str
+      token_type: str = "bearer"
+  ```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_auth_domain.py -v
+  ```
+  Expected: 6 PASS.
+
+- [ ] **Step 5: Commit**
+
+  ```bash
+  git add backend/app/domain/auth.py backend/tests/test_auth_domain.py
+  git commit -m "feat: add auth domain models with password length and email validation"
+  ```
+
+---
+
+## Task 6: auth_service.py
+
+**Files:**
 - Create: `backend/app/services/auth_service.py`
+- Create: `backend/tests/test_auth_service.py`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Write failing unit tests**
 
-Create `backend/tests/test_auth_service.py`:
+  Create `backend/tests/test_auth_service.py`:
+  ```python
+  """Unit tests for auth_service — password hashing and JWT operations."""
 
-```python
-"""Unit tests for auth_service: password hashing and JWT operations."""
+  from __future__ import annotations
 
-from __future__ import annotations
+  import os
 
-import os
-from datetime import UTC, datetime, timedelta
+  import pytest
 
-import jwt as pyjwt
-import pytest
+  os.environ["JWT_SECRET"] = "test-secret-for-unit-tests-only"
 
-os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-xxxxxxxxx")
-
-
-def test_hash_and_verify_password():
-    from app.services.auth_service import hash_password, verify_password
-
-    hashed = hash_password("correcthorse99")
-    assert verify_password("correcthorse99", hashed)
-    assert not verify_password("wronghorse", hashed)
+  from app.services.auth_service import hash_password, issue_token, verify_password, verify_token
 
 
-def test_hash_is_not_plaintext():
-    from app.services.auth_service import hash_password
-
-    assert hash_password("mypassword") != "mypassword"
-
-
-def test_create_and_decode_token():
-    from app.services.auth_service import create_access_token, decode_access_token
-
-    token = create_access_token(user_id="user-abc", email="a@test.com")
-    payload = decode_access_token(token)
-    assert payload["user_id"] == "user-abc"
-    assert payload["email"] == "a@test.com"
-    assert "exp" in payload
+  def test_hash_returns_bcrypt_string() -> None:
+      h = hash_password("mypassword")
+      assert h.startswith("$2b$") or h.startswith("$2a$")
 
 
-def test_expired_token_raises():
-    from app.config import settings
-    from app.services.auth_service import decode_access_token
-
-    expired_payload = {
-        "user_id": "user-abc",
-        "email": "a@test.com",
-        "exp": datetime.now(UTC) - timedelta(seconds=1),
-    }
-    token = pyjwt.encode(expired_payload, settings.jwt_secret, algorithm="HS256")
-    with pytest.raises(Exception):
-        decode_access_token(token)
+  def test_hash_is_not_plaintext() -> None:
+      assert hash_password("mypassword") != "mypassword"
 
 
-def test_tampered_token_raises():
-    from app.services.auth_service import create_access_token, decode_access_token
-
-    token = create_access_token(user_id="user-abc", email="a@test.com")
-    tampered = token[:-4] + "xxxx"
-    with pytest.raises(Exception):
-        decode_access_token(tampered)
-```
-
-- [ ] **Step 2: Run to verify failure**
-
-```bash
-cd backend && ../.venv/bin/pytest tests/test_auth_service.py -v
-```
-
-Expected: `ModuleNotFoundError` for `auth_service`.
-
-- [ ] **Step 3: Create `backend/app/services/auth_service.py`**
-
-```python
-"""Password hashing and JWT operations for user authentication."""
-
-from __future__ import annotations
-
-from datetime import UTC, datetime, timedelta
-
-import bcrypt
-import jwt as pyjwt
-
-from app.config import settings
+  def test_verify_correct_password() -> None:
+      assert verify_password("correct_horse", hash_password("correct_horse")) is True
 
 
-def hash_password(plain: str) -> str:
-    """Hash a plain-text password with bcrypt. Must be ≤72 chars (enforced by domain model)."""
-    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+  def test_verify_wrong_password() -> None:
+      assert verify_password("wrong_horse", hash_password("correct_horse")) is False
 
 
-def verify_password(plain: str, hashed: str) -> bool:
-    """Return True if plain matches the bcrypt hash."""
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+  def test_issue_token_returns_string() -> None:
+      token = issue_token("user-123", "a@b.com")
+      assert isinstance(token, str) and len(token) > 0
 
 
-def create_access_token(user_id: str, email: str) -> str:
-    """Issue a signed HS256 JWT with user_id, email, and expiry."""
-    payload = {
-        "user_id": user_id,
-        "email": email,
-        "exp": datetime.now(UTC) + timedelta(hours=settings.jwt_expiry_hours),
-    }
-    return pyjwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+  def test_verify_token_returns_correct_payload() -> None:
+      token = issue_token("user-abc", "x@y.com")
+      payload = verify_token(token)
+      assert payload["user_id"] == "user-abc"
+      assert payload["email"] == "x@y.com"
 
 
-def decode_access_token(token: str) -> dict:
-    """Decode and verify a JWT. Raises jwt.ExpiredSignatureError or jwt.InvalidTokenError on failure."""
-    return pyjwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-```
+  def test_verify_token_rejects_tampered_token() -> None:
+      import jwt as pyjwt
 
-- [ ] **Step 4: Run tests to verify pass**
+      token = issue_token("user-abc", "x@y.com")
+      with pytest.raises(pyjwt.InvalidTokenError):
+          verify_token(token[:-4] + "XXXX")
 
-```bash
-cd backend && ../.venv/bin/pytest tests/test_auth_service.py -v
-```
 
-Expected: 5 passed.
+  def test_verify_token_rejects_expired_token() -> None:
+      import jwt as pyjwt
+      from datetime import datetime, timedelta, timezone
+
+      payload = {
+          "user_id": "user-abc",
+          "email": "x@y.com",
+          "exp": datetime.now(timezone.utc) - timedelta(seconds=1),
+      }
+      expired = pyjwt.encode(payload, "test-secret-for-unit-tests-only", algorithm="HS256")
+      with pytest.raises(pyjwt.ExpiredSignatureError):
+          verify_token(expired)
+  ```
+
+- [ ] **Step 2: Run to confirm it fails**
+
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_auth_service.py -v
+  ```
+  Expected: FAIL — `app.services.auth_service` not found.
+
+- [ ] **Step 3: Create auth_service.py**
+
+  Create `backend/app/services/auth_service.py`:
+  ```python
+  """Password hashing and JWT issue/verify — no database access."""
+
+  from __future__ import annotations
+
+  from datetime import datetime, timedelta, timezone
+
+  import bcrypt
+  import jwt as pyjwt
+
+  from app.config import settings
+
+
+  def hash_password(password: str) -> str:
+      """Return a bcrypt hash of the given plaintext password."""
+      return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+  def verify_password(password: str, password_hash: str) -> bool:
+      """Return True if password matches the stored bcrypt hash."""
+      return bcrypt.checkpw(password.encode(), password_hash.encode())
+
+
+  def issue_token(user_id: str, email: str) -> str:
+      """Issue a signed HS256 JWT containing user_id, email, and expiry."""
+      exp = datetime.now(timezone.utc) + timedelta(hours=settings.jwt_expiry_hours)
+      return pyjwt.encode(
+          {"user_id": user_id, "email": email, "exp": exp},
+          settings.jwt_secret,
+          algorithm="HS256",
+      )
+
+
+  def verify_token(token: str) -> dict:
+      """Decode and verify a JWT. Raises jwt.InvalidTokenError on any failure."""
+      return pyjwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+  ```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_auth_service.py -v
+  ```
+  Expected: 8 PASS.
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add backend/app/services/auth_service.py backend/tests/test_auth_service.py
-git commit -m "feat: add auth_service with bcrypt hashing and JWT sign/verify"
-```
+  ```bash
+  git add backend/app/services/auth_service.py backend/tests/test_auth_service.py
+  git commit -m "feat: add auth_service with bcrypt hashing and JWT issue/verify"
+  ```
 
 ---
 
-## Task 7: rate_limit_service
+## Task 7: rate_limit_service.py
 
 **Files:**
-- Create: `backend/tests/test_rate_limit_service.py`
 - Create: `backend/app/services/rate_limit_service.py`
+- Create: `backend/tests/test_rate_limit_service.py`
 
-- [ ] **Step 1: Write failing tests**
+This module contains the sliding-window logic. It takes an already-open session (transaction started by the caller) and a user_id. It does not raise HTTP exceptions — it returns `None` on pass and the `retry_after` datetime on limit exceeded.
 
-Create `backend/tests/test_rate_limit_service.py`:
+- [ ] **Step 1: Write failing unit tests**
 
-```python
-"""Unit tests for rate_limit_service sliding-window logic."""
+  Create `backend/tests/test_rate_limit_service.py`:
+  ```python
+  """Unit tests for rate_limit_service sliding window logic."""
 
-from __future__ import annotations
+  from __future__ import annotations
 
-import os
-from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+  import os
+  import uuid
+  from datetime import datetime, timedelta, timezone
+  from unittest.mock import AsyncMock, MagicMock
 
-import pytest
+  import pytest
 
-os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-xxxxxxxxx")
+  os.environ.setdefault("JWT_SECRET", "test-secret")
 
-
-def _make_session(user_found: bool, window_count: int, earliest_dt: datetime | None = None):
-    """Build a mock AsyncSession that returns controlled results for execute() calls."""
-    session = AsyncMock()
-
-    @asynccontextmanager
-    async def mock_begin():
-        yield
-
-    session.begin = mock_begin
-
-    user_result = MagicMock()
-    user_result.scalar_one_or_none.return_value = MagicMock() if user_found else None
-
-    count_result = MagicMock()
-    count_result.scalar_one.return_value = window_count
-
-    earliest_result = MagicMock()
-    earliest_result.scalar_one.return_value = earliest_dt
-
-    if window_count >= 10 and user_found:
-        session.execute = AsyncMock(side_effect=[user_result, count_result, earliest_result])
-    else:
-        session.execute = AsyncMock(side_effect=[user_result, count_result])
-
-    return session
+  from app.services.rate_limit_service import check_rate_limit_and_record
 
 
-async def test_under_limit_inserts_record():
-    from app.services.rate_limit_service import check_and_record
+  def _make_session(user_found: bool, count: int, earliest: datetime | None = None) -> AsyncMock:
+      """Build a mock AsyncSession for given scenario."""
+      session = AsyncMock()
 
-    session = _make_session(user_found=True, window_count=5)
-    await check_and_record(user_id="user-1", session=session, limit=10)
-    session.add.assert_called_once()
+      # First execute: SELECT FOR UPDATE → user row
+      user_row = MagicMock() if user_found else None
+      user_result = MagicMock()
+      user_result.scalar_one_or_none.return_value = user_row
 
+      # Second execute: COUNT
+      count_result = MagicMock()
+      count_result.scalar_one.return_value = count
 
-async def test_at_limit_raises_rate_limit_exceeded():
-    from app.services.rate_limit_service import RateLimitExceeded, check_and_record
+      side_effects = [user_result, count_result]
 
-    earliest = datetime(2026, 3, 19, 14, 0, 0, tzinfo=UTC)
-    session = _make_session(user_found=True, window_count=10, earliest_dt=earliest)
+      if count >= 10 and earliest is not None:
+          # Third execute: SELECT MIN(requested_at)
+          earliest_result = MagicMock()
+          earliest_result.scalar_one.return_value = earliest
+          side_effects.append(earliest_result)
 
-    with pytest.raises(RateLimitExceeded) as exc_info:
-        await check_and_record(user_id="user-1", session=session, limit=10)
-
-    expected_retry = earliest + timedelta(hours=1)
-    assert exc_info.value.retry_after == expected_retry
-    session.add.assert_not_called()
-
-
-async def test_user_not_found_raises_401():
-    from fastapi import HTTPException
-    from app.services.rate_limit_service import check_and_record
-
-    session = _make_session(user_found=False, window_count=0)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await check_and_record(user_id="ghost", session=session, limit=10)
-
-    assert exc_info.value.status_code == 401
-```
-
-- [ ] **Step 2: Run to verify failure**
-
-```bash
-cd backend && ../.venv/bin/pytest tests/test_rate_limit_service.py -v
-```
-
-Expected: `ModuleNotFoundError`.
-
-- [ ] **Step 3: Create `backend/app/services/rate_limit_service.py`**
-
-```python
-"""Sliding-window rate limiting using SELECT FOR UPDATE for atomicity."""
-
-from __future__ import annotations
-
-import uuid
-from datetime import UTC, datetime, timedelta
-
-from fastapi import HTTPException
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.persistence.models import GenerationRequest, User
+      session.execute.side_effect = side_effects
+      return session
 
 
-class RateLimitExceeded(Exception):
-    """Raised when a user exceeds their hourly generation limit."""
+  @pytest.mark.asyncio
+  async def test_under_limit_inserts_row() -> None:
+      session = _make_session(user_found=True, count=5)
+      result = await check_rate_limit_and_record(session, "user-123", limit=10)
+      assert result is None
+      session.add.assert_called_once()
 
-    def __init__(self, retry_after: datetime) -> None:
-        self.retry_after = retry_after
-        super().__init__(f"Rate limit exceeded. Retry after {retry_after.isoformat()}")
+
+  @pytest.mark.asyncio
+  async def test_at_limit_returns_retry_after_and_does_not_insert() -> None:
+      earliest = datetime(2026, 3, 19, 14, 32, tzinfo=timezone.utc)
+      session = _make_session(user_found=True, count=10, earliest=earliest)
+      result = await check_rate_limit_and_record(session, "user-123", limit=10)
+      expected_retry_after = earliest + timedelta(hours=1)
+      assert result == expected_retry_after
+      session.add.assert_not_called()
 
 
-async def check_and_record(user_id: str, session: AsyncSession, limit: int) -> None:
-    """Atomically check the sliding window and insert a new record if under limit.
+  @pytest.mark.asyncio
+  async def test_user_not_found_returns_sentinel() -> None:
+      session = _make_session(user_found=False, count=0)
+      result = await check_rate_limit_and_record(session, "missing-user", limit=10)
+      # Sentinel value signals caller to raise 401
+      assert result is False
+  ```
 
-    Uses SELECT FOR UPDATE on the user row to prevent concurrent requests from
-    both reading count=limit-1 and both inserting, which would exceed the limit.
+- [ ] **Step 2: Run to confirm it fails**
 
-    Raises:
-        HTTPException(401): if the user row is not found.
-        RateLimitExceeded: if the user has reached their hourly limit.
-    """
-    window_start = datetime.now(UTC) - timedelta(hours=1)
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_rate_limit_service.py -v
+  ```
+  Expected: FAIL — `app.services.rate_limit_service` not found.
 
-    async with session.begin():
-        # Acquire row lock to serialize concurrent requests for this user
-        lock_result = await session.execute(
-            select(User).where(User.id == user_id).with_for_update()
-        )
-        user = lock_result.scalar_one_or_none()
-        if user is None:
-            raise HTTPException(status_code=401, detail="User not found")
+- [ ] **Step 3: Create rate_limit_service.py**
 
-        # Count requests in the sliding window
-        count_result = await session.execute(
-            select(func.count()).select_from(GenerationRequest).where(
-                GenerationRequest.user_id == user_id,
-                GenerationRequest.requested_at > window_start,
-            )
-        )
-        count = count_result.scalar_one()
+  Create `backend/app/services/rate_limit_service.py`:
+  ```python
+  """Sliding-window rate limit check and record — no transaction management, no HTTP concerns."""
 
-        if count >= limit:
-            # Find the earliest slot — when it falls out, the next slot opens
-            earliest_result = await session.execute(
-                select(GenerationRequest.requested_at)
-                .where(
-                    GenerationRequest.user_id == user_id,
-                    GenerationRequest.requested_at > window_start,
-                )
-                .order_by(GenerationRequest.requested_at.asc())
-                .limit(1)
-            )
-            earliest = earliest_result.scalar_one()
-            raise RateLimitExceeded(retry_after=earliest + timedelta(hours=1))
+  from __future__ import annotations
 
-        # Under limit — record this attempt before generation starts
-        session.add(
-            GenerationRequest(
-                id=str(uuid.uuid4()),
-                user_id=user_id,
-                requested_at=datetime.now(UTC),
-            )
-        )
-        # Transaction commits automatically on context manager exit
-```
+  import uuid
+  from datetime import datetime, timedelta, timezone
+  from typing import Literal
 
-- [ ] **Step 4: Run tests to verify pass**
+  from sqlalchemy import func, select
+  from sqlalchemy.ext.asyncio import AsyncSession
 
-```bash
-cd backend && ../.venv/bin/pytest tests/test_rate_limit_service.py -v
-```
+  from app.persistence.models import GenerationRequest, User
 
-Expected: 3 passed.
+
+  async def check_rate_limit_and_record(
+      db: AsyncSession,
+      user_id: str,
+      limit: int,
+  ) -> datetime | Literal[False] | None:
+      """Check the sliding window and conditionally insert a generation_requests row.
+
+      Assumes the caller has already begun a transaction with SELECT FOR UPDATE on the
+      user row (or is about to acquire the lock as the first operation here).
+
+      Returns:
+          None          — under limit; row inserted.
+          datetime      — at/over limit; retry_after = earliest_in_window + 1h; no insert.
+          False         — user row not found (caller should raise 401).
+      """
+      result = await db.execute(
+          select(User).where(User.id == user_id).with_for_update()
+      )
+      if result.scalar_one_or_none() is None:
+          return False
+
+      window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+
+      count = (
+          await db.execute(
+              select(func.count())
+              .select_from(GenerationRequest)
+              .where(GenerationRequest.user_id == user_id)
+              .where(GenerationRequest.requested_at > window_start)
+          )
+      ).scalar_one()
+
+      if count >= limit:
+          earliest_at = (
+              await db.execute(
+                  select(GenerationRequest.requested_at)
+                  .where(GenerationRequest.user_id == user_id)
+                  .where(GenerationRequest.requested_at > window_start)
+                  .order_by(GenerationRequest.requested_at.asc())
+                  .limit(1)
+              )
+          ).scalar_one()
+          return earliest_at + timedelta(hours=1)
+
+      db.add(
+          GenerationRequest(
+              id=str(uuid.uuid4()),
+              user_id=user_id,
+              requested_at=datetime.now(timezone.utc),
+          )
+      )
+      return None
+  ```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_rate_limit_service.py -v
+  ```
+  Expected: 3 PASS.
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add backend/app/services/rate_limit_service.py backend/tests/test_rate_limit_service.py
-git commit -m "feat: add rate_limit_service with SELECT FOR UPDATE sliding window"
-```
+  ```bash
+  git add backend/app/services/rate_limit_service.py backend/tests/test_rate_limit_service.py
+  git commit -m "feat: add rate_limit_service with sliding window check and record"
+  ```
 
 ---
 
-## Task 8: FastAPI dependencies
+## Task 8: FastAPI deps + custom exception
 
 **Files:**
-- Create: `backend/tests/test_deps.py`
 - Create: `backend/app/api/deps.py`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Write a failing test**
 
-Create `backend/tests/test_deps.py`:
+  Create `backend/tests/test_deps_import.py`:
+  ```python
+  """Verify deps module exports expected symbols."""
+  import os
 
-```python
-"""Unit tests for FastAPI deps: get_current_user failure branches."""
+  os.environ.setdefault("JWT_SECRET", "test")
 
-from __future__ import annotations
+  def test_deps_exports_expected_symbols() -> None:
+      from app.api.deps import RateLimitExceeded, check_rate_limit, get_current_user
+      assert callable(get_current_user)
+      assert callable(check_rate_limit)
+      assert issubclass(RateLimitExceeded, Exception)
+  ```
 
-import os
-import uuid
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+- [ ] **Step 2: Run to confirm it fails**
 
-import jwt as pyjwt
-import pytest
-from fastapi import HTTPException
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_deps_import.py -v
+  ```
+  Expected: FAIL — `app.api.deps` not found.
 
-os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-xxxxxxxxx")
+- [ ] **Step 3: Create deps.py**
 
+  Create `backend/app/api/deps.py`:
+  ```python
+  """FastAPI dependency providers for auth and rate limiting."""
 
-async def test_missing_header_raises_401():
-    from app.api.deps import get_current_user
+  from __future__ import annotations
 
-    with pytest.raises(HTTPException) as exc:
-        await get_current_user(authorization=None, session=AsyncMock())
-    assert exc.value.status_code == 401
+  from datetime import datetime
 
+  import jwt as pyjwt
+  from fastapi import Depends, Header, HTTPException
+  from sqlalchemy.ext.asyncio import AsyncSession
 
-async def test_malformed_header_raises_401():
-    from app.api.deps import get_current_user
-
-    with pytest.raises(HTTPException) as exc:
-        await get_current_user(authorization="Token notbearer", session=AsyncMock())
-    assert exc.value.status_code == 401
-
-
-async def test_expired_token_raises_401():
-    from app.config import settings
-    from app.api.deps import get_current_user
-
-    expired = pyjwt.encode(
-        {"user_id": "x", "email": "a@b.com", "exp": datetime.now(UTC) - timedelta(seconds=1)},
-        settings.jwt_secret,
-        algorithm="HS256",
-    )
-    with pytest.raises(HTTPException) as exc:
-        await get_current_user(authorization=f"Bearer {expired}", session=AsyncMock())
-    assert exc.value.status_code == 401
+  from app.config import settings
+  from app.persistence.db import get_session, session_factory
+  from app.persistence.models import User
+  from app.services.auth_service import verify_token
+  from app.services.rate_limit_service import check_rate_limit_and_record
 
 
-async def test_valid_token_user_not_in_db_raises_401():
-    from app.api.deps import get_current_user
-    from app.services.auth_service import create_access_token
+  class RateLimitExceeded(Exception):
+      """Raised when a user exceeds their hourly generation request limit."""
 
-    token = create_access_token(user_id="ghost", email="ghost@test.com")
-    mock_session = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = None
-    mock_session.execute = AsyncMock(return_value=mock_result)
-
-    with pytest.raises(HTTPException) as exc:
-        await get_current_user(authorization=f"Bearer {token}", session=mock_session)
-    assert exc.value.status_code == 401
+      def __init__(self, retry_after: datetime) -> None:
+          self.retry_after = retry_after
 
 
-async def test_valid_token_returns_user():
-    from app.api.deps import get_current_user
-    from app.persistence.models import User
-    from app.services.auth_service import create_access_token
+  async def get_current_user(
+      authorization: str | None = Header(default=None),
+      db: AsyncSession = Depends(get_session),
+  ) -> User:
+      """Resolve Bearer token to a User record. Raises 401 on any auth failure."""
+      if not authorization or not authorization.startswith("Bearer "):
+          raise HTTPException(status_code=401, detail="Not authenticated")
 
-    user = User(id=str(uuid.uuid4()), email="a@test.com", password_hash="x")
-    token = create_access_token(user_id=user.id, email=user.email)
-    mock_session = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = user
-    mock_session.execute = AsyncMock(return_value=mock_result)
+      token = authorization[7:]
+      try:
+          payload = verify_token(token)
+      except pyjwt.ExpiredSignatureError:
+          raise HTTPException(status_code=401, detail="Token expired")
+      except pyjwt.InvalidTokenError:
+          raise HTTPException(status_code=401, detail="Invalid token")
 
-    result = await get_current_user(authorization=f"Bearer {token}", session=mock_session)
-    assert result is user
-```
+      user = await db.get(User, payload["user_id"])
+      if user is None:
+          raise HTTPException(status_code=401, detail="User not found")
 
-- [ ] **Step 2: Run to verify failure**
-
-```bash
-cd backend && ../.venv/bin/pytest tests/test_deps.py -v
-```
-
-Expected: `ModuleNotFoundError` — `app.api.deps` doesn't exist yet.
-
-- [ ] **Step 3: Create `backend/app/api/deps.py`**
-
-```python
-"""FastAPI injectable dependencies for authentication and rate limiting."""
-
-from __future__ import annotations
-
-import jwt as pyjwt
-from fastapi import Depends, Header, HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.config import settings
-from app.persistence.db import get_session
-from app.persistence.models import User
-from app.services.auth_service import decode_access_token
-from app.services.rate_limit_service import check_and_record
+      return user
 
 
-async def get_current_user(
-    authorization: str | None = Header(default=None),
-    session: AsyncSession = Depends(get_session),
-) -> User:
-    """Validate Bearer JWT and return the authenticated user. Raises 401 on any failure."""
+  async def check_rate_limit(
+      current_user: User = Depends(get_current_user),
+  ) -> None:
+      """Enforce per-user sliding-window rate limit; insert a generation_requests row on pass.
 
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
+      Uses a fresh session (not the one from get_current_user) to avoid an
+      InvalidRequestError when calling db.begin() on a session that already has an
+      active transaction from get_current_user's queries.
 
-    token = authorization.removeprefix("Bearer ")
-    try:
-        payload = decode_access_token(token)
-    except pyjwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except pyjwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+      Raises RateLimitExceeded (handled in main.py) if the limit is reached.
+      The insert happens before story generation starts — a failing request still counts.
+      """
+      async with session_factory() as db:
+          async with db.begin():
+              result = await check_rate_limit_and_record(
+                  db, current_user.id, settings.rate_limit_per_hour
+              )
 
-    result = await session.execute(select(User).where(User.id == payload["user_id"]))
-    user = result.scalar_one_or_none()
-    if user is None:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
+      if result is False:
+          raise HTTPException(status_code=401, detail="User not found")
+      if result is not None:
+          raise RateLimitExceeded(result)
+  ```
 
+- [ ] **Step 4: Run test to verify it passes**
 
-async def check_rate_limit(
-    current_user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-) -> None:
-    """Enforce per-user sliding-window rate limit.
-
-    Note: `session` here is a SEPARATE AsyncSession from the one injected into
-    `get_current_user`. FastAPI creates one session per Depends(get_session) call.
-    This is intentional: `check_and_record` opens its own transaction with
-    SELECT FOR UPDATE, which must not share a session with the auth lookup.
-    """
-    await check_and_record(
-        user_id=current_user.id,
-        session=session,
-        limit=settings.rate_limit_per_hour,
-    )
-```
-
-- [ ] **Step 4: Run tests to verify pass**
-
-```bash
-cd backend && ../.venv/bin/pytest tests/test_deps.py -v
-```
-
-Expected: 5 passed.
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/test_deps_import.py -v
+  ```
+  Expected: 1 PASS.
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add backend/app/api/deps.py backend/tests/test_deps.py
-git commit -m "feat: add get_current_user and check_rate_limit FastAPI dependencies"
-```
+  ```bash
+  git add backend/app/api/deps.py backend/tests/test_deps_import.py
+  git commit -m "feat: add get_current_user, check_rate_limit, RateLimitExceeded"
+  ```
 
 ---
 
-## Task 9: Auth endpoints
+## Task 9: Auth API endpoints
 
 **Files:**
-- Create: `backend/tests/test_auth_endpoints.py`
 - Create: `backend/app/api/v1/auth.py`
 
-- [ ] **Step 1: Write failing tests**
+- [ ] **Step 1: Create auth.py router**
 
-Create `backend/tests/test_auth_endpoints.py`:
+  Create `backend/app/api/v1/auth.py`:
+  ```python
+  """User registration and login endpoints."""
 
-```python
-"""Tests for auth endpoints using ASGI test client with mocked DB session."""
+  from __future__ import annotations
 
-from __future__ import annotations
+  import uuid
 
-import os
-import uuid
-from unittest.mock import AsyncMock, MagicMock
+  from fastapi import APIRouter, Depends, HTTPException
+  from sqlalchemy import select
+  from sqlalchemy.exc import IntegrityError
+  from sqlalchemy.ext.asyncio import AsyncSession
 
-import pytest
-from httpx import ASGITransport, AsyncClient
+  from app.domain.auth import LoginRequest, RegisterRequest, TokenResponse
+  from app.persistence.db import get_session
+  from app.persistence.models import User
+  from app.services.auth_service import hash_password, issue_token, verify_password
 
-os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-xxxxxxxxx")
-
-
-@pytest.fixture
-def app():
-    from app.main import create_app
-    return create_app()
+  router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _mock_session_factory(scalar_result):
-    """Return an async session override where execute() returns the given scalar result."""
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = scalar_result
+  @router.post("/register", status_code=201)
+  async def register(
+      body: RegisterRequest,
+      db: AsyncSession = Depends(get_session),
+  ) -> TokenResponse:
+      """Create a new user account and return a JWT access token."""
+      user = User(
+          id=str(uuid.uuid4()),
+          email=body.email,
+          password_hash=hash_password(body.password),
+      )
+      db.add(user)
+      try:
+          await db.commit()
+      except IntegrityError:
+          await db.rollback()
+          raise HTTPException(status_code=409, detail="Email already registered")
 
-    mock_session = AsyncMock()
-    mock_session.execute = AsyncMock(return_value=mock_result)
-    mock_session.add = MagicMock()
-    mock_session.commit = AsyncMock()
-
-    async def override():
-        yield mock_session
-
-    return override, mock_session
-
-
-async def test_register_returns_201_with_token(app):
-    from app.persistence.db import get_session
-
-    override, _ = _mock_session_factory(scalar_result=None)  # email not taken
-    app.dependency_overrides[get_session] = override
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post(
-            "/api/v1/auth/register",
-            json={"email": "new@example.com", "password": "strongpass1"},
-        )
-
-    app.dependency_overrides.clear()
-    assert resp.status_code == 201
-    body = resp.json()
-    assert "access_token" in body
-    assert body["token_type"] == "bearer"
+      return TokenResponse(access_token=issue_token(user.id, user.email))
 
 
-async def test_register_duplicate_email_returns_409(app):
-    from app.persistence.db import get_session
+  @router.post("/login")
+  async def login(
+      body: LoginRequest,
+      db: AsyncSession = Depends(get_session),
+  ) -> TokenResponse:
+      """Verify credentials and return a JWT access token."""
+      result = await db.execute(select(User).where(User.email == body.email))
+      user = result.scalar_one_or_none()
 
-    existing_user = MagicMock()
-    override, _ = _mock_session_factory(scalar_result=existing_user)
-    app.dependency_overrides[get_session] = override
+      if user is None or not verify_password(body.password, user.password_hash):
+          raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post(
-            "/api/v1/auth/register",
-            json={"email": "taken@example.com", "password": "strongpass1"},
-        )
+      return TokenResponse(access_token=issue_token(user.id, user.email))
+  ```
 
-    app.dependency_overrides.clear()
-    assert resp.status_code == 409
+- [ ] **Step 2: Verify import**
 
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/python -c \
+    "from app.api.v1.auth import router; print('OK')"
+  ```
+  Expected: `OK`
 
-async def test_login_valid_credentials_returns_token(app):
-    from app.persistence.db import get_session
-    from app.persistence.models import User
-    from app.services.auth_service import hash_password
+- [ ] **Step 3: Commit**
 
-    user = User(
-        id=str(uuid.uuid4()),
-        email="user@example.com",
-        password_hash=hash_password("correctpassword"),
-    )
-    override, _ = _mock_session_factory(scalar_result=user)
-    app.dependency_overrides[get_session] = override
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post(
-            "/api/v1/auth/login",
-            json={"email": "user@example.com", "password": "correctpassword"},
-        )
-
-    app.dependency_overrides.clear()
-    assert resp.status_code == 200
-    assert "access_token" in resp.json()
-
-
-async def test_login_wrong_password_returns_401(app):
-    from app.persistence.db import get_session
-    from app.persistence.models import User
-    from app.services.auth_service import hash_password
-
-    user = User(
-        id=str(uuid.uuid4()),
-        email="user@example.com",
-        password_hash=hash_password("correctpassword"),
-    )
-    override, _ = _mock_session_factory(scalar_result=user)
-    app.dependency_overrides[get_session] = override
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post(
-            "/api/v1/auth/login",
-            json={"email": "user@example.com", "password": "wrongpassword"},
-        )
-
-    app.dependency_overrides.clear()
-    assert resp.status_code == 401
-```
-
-- [ ] **Step 2: Run to verify failure**
-
-```bash
-cd backend && ../.venv/bin/pytest tests/test_auth_endpoints.py -v
-```
-
-Expected: all four tests fail with assertion errors — `create_app()` doesn't include the auth router yet, so every call returns 404 instead of the expected 201/409/200/401.
-
-- [ ] **Step 3: Create `backend/app/api/v1/auth.py`**
-
-```python
-"""Authentication endpoints: register and login."""
-
-from __future__ import annotations
-
-import uuid
-
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.domain.auth import LoginRequest, RegisterRequest, TokenResponse
-from app.persistence.db import get_session
-from app.persistence.models import User
-from app.services.auth_service import create_access_token, hash_password, verify_password
-
-router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-@router.post("/register", status_code=201)
-async def register(
-    request: RegisterRequest,
-    session: AsyncSession = Depends(get_session),
-) -> TokenResponse:
-    """Register a new user and return a JWT access token."""
-
-    result = await session.execute(select(User).where(User.email == request.email))
-    if result.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="Email already registered")
-
-    user = User(
-        id=str(uuid.uuid4()),
-        email=request.email,
-        password_hash=hash_password(request.password),
-    )
-    session.add(user)
-    try:
-        await session.commit()
-    except IntegrityError:
-        # Concurrent registration with the same email hit the unique constraint
-        await session.rollback()
-        raise HTTPException(status_code=409, detail="Email already registered")
-
-    return TokenResponse(access_token=create_access_token(user.id, user.email))
-
-
-@router.post("/login")
-async def login(
-    request: LoginRequest,
-    session: AsyncSession = Depends(get_session),
-) -> TokenResponse:
-    """Verify credentials and return a JWT access token."""
-
-    result = await session.execute(select(User).where(User.email == request.email))
-    user = result.scalar_one_or_none()
-
-    if user is None or not verify_password(request.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    return TokenResponse(access_token=create_access_token(user.id, user.email))
-```
-
-**Note on green phase:** The four endpoint tests in `test_auth_endpoints.py` cannot pass until the auth router is registered in Task 10. Their green-phase verification is Step 3 of Task 10 (`pytest tests/ -v`). Commit now and confirm green in Task 10.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add backend/app/api/v1/auth.py backend/tests/test_auth_endpoints.py
-git commit -m "feat: add register and login endpoints"
-```
+  ```bash
+  git add backend/app/api/v1/auth.py
+  git commit -m "feat: add register and login endpoints"
+  ```
 
 ---
 
-## Task 10: Wire the app
+## Task 10: Wire backend — main.py + stories.py
 
 **Files:**
 - Modify: `backend/app/main.py`
 - Modify: `backend/app/api/v1/stories.py`
 
-- [ ] **Step 1: Register auth router and `RateLimitExceeded` handler in `backend/app/main.py`**
+- [ ] **Step 1: Read both files before editing**
 
-Add to imports at the top:
+  Read `backend/app/main.py` and `backend/app/api/v1/stories.py` in full before making any changes.
 
-```python
-from email.utils import formatdate
+- [ ] **Step 2: Register auth router and RateLimitExceeded handler in main.py**
 
-from fastapi.responses import JSONResponse
+  Add these imports at the top of `backend/app/main.py` (alongside existing imports):
+  ```python
+  from fastapi import FastAPI, Request
+  from fastapi.responses import JSONResponse
+  from app.api.v1.auth import router as auth_router
+  from app.api.deps import RateLimitExceeded
+  ```
 
-from app.api.v1.auth import router as auth_router
-from app.services.rate_limit_service import RateLimitExceeded
-```
+  Inside `create_app()`, after `app.include_router(stories_router, prefix="/api/v1")`, add:
+  ```python
+  app.include_router(auth_router, prefix="/api/v1")
 
-In `create_app()`, after `app.include_router(stories_router, prefix="/api/v1")`, add:
+  @app.exception_handler(RateLimitExceeded)
+  async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+      return JSONResponse(
+          status_code=429,
+          headers={"Retry-After": exc.retry_after.strftime("%a, %d %b %Y %H:%M:%S GMT")},
+          content={
+              "detail": "Rate limit exceeded",
+              "retry_after": exc.retry_after.strftime("%Y-%m-%dT%H:%M:%SZ"),
+          },
+      )
+  ```
 
-```python
-    app.include_router(auth_router, prefix="/api/v1")
+  > The exception handler lives here (not in `deps.py`) because `main.py` is where the app is assembled and it avoids a circular import.
 
-    @app.exception_handler(RateLimitExceeded)
-    async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
-        retry_iso = exc.retry_after.isoformat()
-        retry_http = formatdate(exc.retry_after.timestamp(), usegmt=True)
-        return JSONResponse(
-            status_code=429,
-            content={"detail": "Rate limit exceeded", "retry_after": retry_iso},
-            headers={"Retry-After": retry_http},
-        )
-```
+- [ ] **Step 3: Add check_rate_limit dep to stories.py**
 
-Note: `Request` is already imported from `fastapi` in `main.py`.
+  In `backend/app/api/v1/stories.py`, update the `fastapi` import to include `Depends`:
+  ```python
+  from fastapi import APIRouter, Depends, HTTPException
+  ```
 
-- [ ] **Step 2: Inject `check_rate_limit` into stories endpoint**
+  Add this import after the existing `app.` imports:
+  ```python
+  from app.api.deps import check_rate_limit
+  ```
 
-In `backend/app/api/v1/stories.py`, add import:
+  Update the `generate_long_form_story` function signature:
+  ```python
+  @router.post("/generate-long-form")
+  async def generate_long_form_story(
+      request: LongFormRequest,
+      _rate_limit: None = Depends(check_rate_limit),
+  ) -> StreamingResponse:
+  ```
 
-```python
-from fastapi import APIRouter, Depends, HTTPException
-from app.api.deps import check_rate_limit
-```
+- [ ] **Step 4: Smoke-test the app starts**
 
-Change the `generate_long_form_story` signature to:
-
-```python
-@router.post("/generate-long-form")
-async def generate_long_form_story(
-    request: LongFormRequest,
-    _: None = Depends(check_rate_limit),
-) -> StreamingResponse:
-```
-
-- [ ] **Step 3: Run all backend tests**
-
-```bash
-cd backend && ../.venv/bin/pytest tests/ -v --ignore=tests/test_auth_integration.py
-```
-
-Expected: all tests pass, including `test_auth_endpoints.py`.
-
-- [ ] **Step 4: Smoke test the running server**
-
-```bash
-# Terminal 1 — start server
-cd backend && JWT_SECRET='dev-secret-min-32-chars-xxxxxxxxxxxx' \
-  DATABASE_URL='postgresql+asyncpg://mikha:postgres@127.0.0.1:5432/loreforge' \
-  ../.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-
-# Terminal 2 — register then login
-curl -s -X POST http://127.0.0.1:8000/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"test@test.com","password":"testpassword1"}' | python3 -m json.tool
-
-curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"test@test.com","password":"testpassword1"}' | python3 -m json.tool
-```
-
-Expected: both return `{"access_token": "...", "token_type": "bearer"}`.
+  ```bash
+  cd backend && JWT_SECRET=test-secret-minimum-length \
+    DATABASE_URL='postgresql+asyncpg://mikha:postgres@127.0.0.1:5432/loreforge' \
+    ../.venv/bin/python -c "from app.main import create_app; create_app(); print('OK')"
+  ```
+  Expected: `OK`
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add backend/app/main.py backend/app/api/v1/stories.py
-git commit -m "feat: wire auth router and rate limit guard into story generation"
-```
+  ```bash
+  git add backend/app/main.py backend/app/api/v1/stories.py
+  git commit -m "feat: wire auth router, rate limit dep, and RateLimitExceeded handler"
+  ```
 
 ---
 
 ## Task 11: Integration tests
 
 **Files:**
+- Create: `backend/tests/conftest.py`
 - Create: `backend/tests/test_auth_integration.py`
 
-These tests require a running PostgreSQL with migrations applied. Run with the `integration` marker.
+- [ ] **Step 1: Create conftest.py**
 
-- [ ] **Step 1: Create `backend/tests/test_auth_integration.py`**
+  Create `backend/tests/conftest.py`:
+  ```python
+  """Shared pytest fixtures for integration tests."""
 
-```python
-"""Integration tests: full register → login → generate flow against a real DB.
+  from __future__ import annotations
 
-Run with:
-    DATABASE_URL='postgresql+asyncpg://...' JWT_SECRET='...' \
-    USE_STUB_LLM=true pytest -m integration tests/test_auth_integration.py -v
-"""
+  import asyncio
+  import os
 
-from __future__ import annotations
+  import pytest
+  import pytest_asyncio
+  from httpx import ASGITransport, AsyncClient
+  from sqlalchemy import text
 
-import os
-import uuid
+  os.environ.setdefault("JWT_SECRET", "integration-test-secret-do-not-use-in-prod")
 
-import pytest
-from httpx import ASGITransport, AsyncClient
-
-pytestmark = pytest.mark.integration
-
-os.environ.setdefault("JWT_SECRET", os.environ.get("JWT_SECRET", "integration-test-secret-min-32ch!!"))
-os.environ.setdefault("USE_STUB_LLM", "true")
+  from app.main import create_app
+  from app.persistence.db import session_factory
 
 
-@pytest.fixture
-async def client():
-    from app.main import create_app
-    app = create_app()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        yield c
+  @pytest.fixture(scope="session")
+  def event_loop():
+      loop = asyncio.new_event_loop()
+      yield loop
+      loop.close()
 
 
-async def test_register_and_login_flow(client):
-    email = f"integ-{uuid.uuid4()}@test.com"
-
-    reg = await client.post(
-        "/api/v1/auth/register",
-        json={"email": email, "password": "integpassword1"},
-    )
-    assert reg.status_code == 201
-    assert "access_token" in reg.json()
-
-    login = await client.post(
-        "/api/v1/auth/login",
-        json={"email": email, "password": "integpassword1"},
-    )
-    assert login.status_code == 200
-    assert "access_token" in login.json()
+  @pytest_asyncio.fixture
+  async def db_session():
+      """Session that truncates auth tables after each test for isolation."""
+      async with session_factory() as session:
+          yield session
+          await session.execute(text("DELETE FROM generation_requests"))
+          await session.execute(text("DELETE FROM users"))
+          await session.commit()
 
 
-async def test_unauthenticated_generate_returns_401(client):
-    resp = await client.post(
-        "/api/v1/stories/generate-long-form",
-        json={
-            "context": {"user_prompt": "A story"},
-            "vibe": {"aggression": 50, "reader_respect": 50, "morality": 50, "source_fidelity": 50},
-            "provider": {"provider": "ollama", "model": "gpt-oss:20b"},
-        },
-    )
-    assert resp.status_code == 401
+  @pytest_asyncio.fixture
+  async def client():
+      """Async HTTP client wired to the FastAPI test app via ASGI transport."""
+      async with AsyncClient(
+          transport=ASGITransport(app=create_app()),
+          base_url="http://test",
+      ) as c:
+          yield c
+  ```
+
+- [ ] **Step 2: Create integration tests**
+
+  Create `backend/tests/test_auth_integration.py`:
+  ```python
+  """Integration tests for auth endpoints and rate limiting (require real DB)."""
+
+  from __future__ import annotations
+
+  import asyncio
+  import uuid
+  from datetime import datetime, timedelta, timezone
+
+  import pytest
+  from httpx import AsyncClient
+  from sqlalchemy.ext.asyncio import AsyncSession
+
+  from app.persistence.models import GenerationRequest, User
+  from app.services.auth_service import hash_password, issue_token
+
+  pytestmark = pytest.mark.integration
 
 
-async def test_rate_limit_enforced(client):
-    """Register a fresh user, exhaust their limit, verify 429 on the next request."""
-    email = f"ratelimit-{uuid.uuid4()}@test.com"
+  # ── Register ──────────────────────────────────────────────────────────────────
 
-    reg = await client.post(
-        "/api/v1/auth/register",
-        json={"email": email, "password": "testpassword1"},
-    )
-    token = reg.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
 
-    payload = {
-        "context": {"user_prompt": "A story"},
-        "vibe": {"aggression": 50, "reader_respect": 50, "morality": 50, "source_fidelity": 50},
-        "provider": {"provider": "ollama", "model": "gpt-oss:20b"},
-        "chapter_count": 2,
-    }
+  @pytest.mark.asyncio
+  async def test_register_returns_201_with_token(client: AsyncClient) -> None:
+      resp = await client.post(
+          "/api/v1/auth/register",
+          json={"email": "alice@test.com", "password": "password123"},
+      )
+      assert resp.status_code == 201
+      data = resp.json()
+      assert "access_token" in data
+      assert data["token_type"] == "bearer"
 
-    limit = int(os.environ.get("RATE_LIMIT_PER_HOUR", "10"))
-    for _ in range(limit):
-        resp = await client.post(
-            "/api/v1/stories/generate-long-form", headers=headers, json=payload
-        )
-        assert resp.status_code != 429
 
-    resp = await client.post(
-        "/api/v1/stories/generate-long-form", headers=headers, json=payload
-    )
-    assert resp.status_code == 429
-    body = resp.json()
-    assert "retry_after" in body
-    assert "Retry-After" in resp.headers
-```
+  @pytest.mark.asyncio
+  async def test_register_409_on_duplicate_email(client: AsyncClient) -> None:
+      payload = {"email": "bob@test.com", "password": "password123"}
+      await client.post("/api/v1/auth/register", json=payload)
+      resp = await client.post("/api/v1/auth/register", json=payload)
+      assert resp.status_code == 409
 
-- [ ] **Step 2: Commit**
 
-```bash
-git add backend/tests/test_auth_integration.py
-git commit -m "test: add auth integration tests (register, login, rate limit)"
-```
+  # ── Login ─────────────────────────────────────────────────────────────────────
+
+
+  @pytest.mark.asyncio
+  async def test_login_returns_200_with_token(client: AsyncClient) -> None:
+      email, pwd = "carol@test.com", "password123"
+      await client.post("/api/v1/auth/register", json={"email": email, "password": pwd})
+      resp = await client.post("/api/v1/auth/login", json={"email": email, "password": pwd})
+      assert resp.status_code == 200
+      assert "access_token" in resp.json()
+
+
+  @pytest.mark.asyncio
+  async def test_login_401_wrong_password(client: AsyncClient) -> None:
+      await client.post(
+          "/api/v1/auth/register",
+          json={"email": "dave@test.com", "password": "correctpass"},
+      )
+      resp = await client.post(
+          "/api/v1/auth/login",
+          json={"email": "dave@test.com", "password": "wrongpass"},
+      )
+      assert resp.status_code == 401
+
+
+  # ── Auth guard ────────────────────────────────────────────────────────────────
+
+
+  @pytest.mark.asyncio
+  async def test_generate_endpoint_requires_auth(client: AsyncClient) -> None:
+      resp = await client.post("/api/v1/stories/generate-long-form", json={})
+      assert resp.status_code == 401
+
+
+  # ── Rate limiting ─────────────────────────────────────────────────────────────
+
+
+  async def _create_user_with_token(
+      db_session: AsyncSession,
+      email: str,
+  ) -> tuple[User, str]:
+      """Helper: insert a User row directly and return (user, token)."""
+      user = User(
+          id=str(uuid.uuid4()),
+          email=email,
+          password_hash=hash_password("pass12345"),
+      )
+      db_session.add(user)
+      await db_session.commit()
+      return user, issue_token(user.id, user.email)
+
+
+  @pytest.mark.asyncio
+  async def test_rate_limit_blocks_after_n_requests(
+      client: AsyncClient, db_session: AsyncSession
+  ) -> None:
+      """After RATE_LIMIT_PER_HOUR rows in the window the next request returns 429."""
+      from app.config import settings
+
+      user, token = await _create_user_with_token(db_session, "ratelimited@test.com")
+
+      now = datetime.now(timezone.utc)
+      for _ in range(settings.rate_limit_per_hour):
+          db_session.add(
+              GenerationRequest(
+                  id=str(uuid.uuid4()),
+                  user_id=user.id,
+                  requested_at=now - timedelta(minutes=30),
+              )
+          )
+      await db_session.commit()
+
+      resp = await client.post(
+          "/api/v1/stories/generate-long-form",
+          headers={"Authorization": f"Bearer {token}"},
+          json={},
+      )
+      assert resp.status_code == 429
+      body = resp.json()
+      # Body shape from the custom RateLimitExceeded handler — flat, not nested
+      assert body["detail"] == "Rate limit exceeded"
+      assert "retry_after" in body
+      assert "Retry-After" in resp.headers
+
+
+  @pytest.mark.asyncio
+  async def test_rate_limit_retry_after_is_correct(
+      client: AsyncClient, db_session: AsyncSession
+  ) -> None:
+      """retry_after must equal earliest_in_window + 1 hour (±2s tolerance)."""
+      from app.config import settings
+
+      user, token = await _create_user_with_token(db_session, "retrycheck@test.com")
+
+      earliest = datetime.now(timezone.utc) - timedelta(minutes=45)
+      for i in range(settings.rate_limit_per_hour):
+          db_session.add(
+              GenerationRequest(
+                  id=str(uuid.uuid4()),
+                  user_id=user.id,
+                  requested_at=earliest + timedelta(minutes=i),
+              )
+          )
+      await db_session.commit()
+
+      resp = await client.post(
+          "/api/v1/stories/generate-long-form",
+          headers={"Authorization": f"Bearer {token}"},
+          json={},
+      )
+      assert resp.status_code == 429
+      retry_after = datetime.fromisoformat(
+          resp.json()["retry_after"].replace("Z", "+00:00")
+      )
+      expected = earliest + timedelta(hours=1)
+      assert abs((retry_after - expected).total_seconds()) < 2
+
+
+  @pytest.mark.asyncio
+  async def test_rate_limit_concurrent_requests_cannot_bypass(
+      client: AsyncClient, db_session: AsyncSession
+  ) -> None:
+      """SELECT FOR UPDATE must prevent two concurrent requests both reading count=9
+      and both inserting, which would let a burst exceed the limit."""
+      from app.config import settings
+      from app.persistence.db import session_factory
+      from sqlalchemy import select, func
+
+      user, token = await _create_user_with_token(db_session, "concurrent@test.com")
+
+      # Pre-fill to one below the limit
+      now = datetime.now(timezone.utc)
+      for _ in range(settings.rate_limit_per_hour - 1):
+          db_session.add(
+              GenerationRequest(
+                  id=str(uuid.uuid4()),
+                  user_id=user.id,
+                  requested_at=now - timedelta(minutes=30),
+              )
+          )
+      await db_session.commit()
+
+      # Fire two requests simultaneously — only one should succeed
+      results = await asyncio.gather(
+          client.post(
+              "/api/v1/stories/generate-long-form",
+              headers={"Authorization": f"Bearer {token}"},
+              json={},
+          ),
+          client.post(
+              "/api/v1/stories/generate-long-form",
+              headers={"Authorization": f"Bearer {token}"},
+              json={},
+          ),
+          return_exceptions=True,
+      )
+
+      statuses = [r.status_code for r in results if hasattr(r, "status_code")]
+      # One request should have passed auth+rate-limit (200 or 4xx from missing body),
+      # the other should have been blocked (429). Not both should pass rate limit.
+      # The one that passes rate limit will fail at body validation (422) — that's fine.
+      assert 429 in statuses, (
+          f"Expected at least one 429 in concurrent results, got {statuses}"
+      )
+
+      # Confirm only one row was inserted (count = limit, not limit+1)
+      async with session_factory() as check_session:
+          window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+          count = (
+              await check_session.execute(
+                  select(func.count())
+                  .select_from(GenerationRequest)
+                  .where(GenerationRequest.user_id == user.id)
+                  .where(GenerationRequest.requested_at > window_start)
+              )
+          ).scalar_one()
+          assert count == settings.rate_limit_per_hour
+  ```
+
+- [ ] **Step 3: Run integration tests**
+
+  ```bash
+  cd backend && JWT_SECRET=integration-test-secret-do-not-use-in-prod \
+    DATABASE_URL='postgresql+asyncpg://mikha:postgres@127.0.0.1:5432/loreforge' \
+    ../.venv/bin/pytest tests/test_auth_integration.py -v -m integration
+  ```
+  Expected: all tests pass. The concurrent test is inherently racy — if it fails intermittently, inspect whether the FOR UPDATE lock is correctly engaged.
+
+- [ ] **Step 4: Commit**
+
+  ```bash
+  git add backend/tests/conftest.py backend/tests/test_auth_integration.py
+  git commit -m "test: add conftest and integration tests for auth and rate limiting"
+  ```
 
 ---
 
@@ -1447,455 +1399,438 @@ git commit -m "test: add auth integration tests (register, login, rate limit)"
 **Files:**
 - Create: `frontend/src/components/auth-modal.tsx`
 
-- [ ] **Step 1: Create `frontend/src/components/auth-modal.tsx`**
+- [ ] **Step 1: Create auth-modal.tsx**
 
-```tsx
-"use client";
+  Create `frontend/src/components/auth-modal.tsx`:
+  ```tsx
+  "use client";
 
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+  import { useState } from "react";
 
-interface AuthModalProps {
-  onAuthenticated: (token: string) => void;
-}
+  import { Button } from "@/components/ui/button";
+  import { Input } from "@/components/ui/input";
+  import { Label } from "@/components/ui/label";
 
-type Mode = "login" | "register";
-
-export function AuthModal({ onAuthenticated }: AuthModalProps) {
-  const [mode, setMode]         = useState<Mode>("login");
-  const [email, setEmail]       = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError]       = useState<string | null>(null);
-  const [loading, setLoading]   = useState(false);
-
-  const submit = async () => {
-    setError(null);
-    setLoading(true);
-    const endpoint = mode === "login"
-      ? "/api/v1/auth/login"
-      : "/api/v1/auth/register";
-
-    try {
-      const resp = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-
-      if (resp.status === 409) { setError("Email already registered."); return; }
-      if (resp.status === 401) { setError("Invalid email or password."); return; }
-      if (!resp.ok) { setError("Something went wrong. Please try again."); return; }
-
-      const { access_token } = await resp.json() as { access_token: string };
-      localStorage.setItem("lf_token", access_token);
-      onAuthenticated(access_token);
-    } catch {
-      setError("Network error. Please try again.");
-    } finally {
-      setLoading(false);
-    }
+  export type AuthModalProps = {
+    onAuthenticated: (token: string) => void;
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-      <div className="w-full max-w-sm rounded-xl border border-white/10 bg-zinc-900 p-8 shadow-2xl">
-        <h2 className="mb-6 text-xl font-semibold text-white">
-          {mode === "login" ? "Sign in" : "Create account"}
-        </h2>
+  type Mode = "login" | "register";
 
-        <div className="space-y-4">
-          <div>
-            <Label htmlFor="auth-email" className="text-zinc-300">Email</Label>
-            <Input
-              id="auth-email"
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="mt-1"
-              disabled={loading}
-            />
-          </div>
+  export function AuthModal({ onAuthenticated }: AuthModalProps) {
+    const [mode, setMode]         = useState<Mode>("login");
+    const [email, setEmail]       = useState("");
+    const [password, setPassword] = useState("");
+    const [error, setError]       = useState<string | null>(null);
+    const [loading, setLoading]   = useState(false);
 
-          <div>
-            <Label htmlFor="auth-password" className="text-zinc-300">Password</Label>
-            <Input
-              id="auth-password"
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder={mode === "register" ? "8–72 characters" : ""}
-              className="mt-1"
-              disabled={loading}
-            />
-          </div>
+    async function handleSubmit(e: React.FormEvent) {
+      e.preventDefault();
+      setError(null);
+      setLoading(true);
 
-          {error && <p className="text-sm text-red-400">{error}</p>}
+      const endpoint =
+        mode === "register" ? "/api/v1/auth/register" : "/api/v1/auth/login";
 
-          <Button
-            onClick={submit}
-            disabled={loading || !email || !password}
-            className="w-full"
+      try {
+        const resp = await fetch(endpoint, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ email, password }),
+        });
+
+        if (resp.status === 409) { setError("Email already registered. Try logging in."); return; }
+        if (resp.status === 401) { setError("Invalid email or password."); return; }
+        if (!resp.ok)            { setError("Something went wrong. Please try again."); return; }
+
+        const data = await resp.json();
+        localStorage.setItem("lf_token", data.access_token);
+        onAuthenticated(data.access_token);
+      } catch {
+        setError("Network error. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center"
+        style={{ background: "rgba(0,0,0,0.7)" }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="auth-modal-title"
+      >
+        <div
+          className="w-full max-w-sm rounded-xl p-6 space-y-4"
+          style={{ background: "var(--surface-raised)", border: "1px solid var(--border)" }}
+        >
+          <h2
+            id="auth-modal-title"
+            className="text-lg font-semibold"
+            style={{ fontFamily: "var(--font-mono)", color: "var(--teal)" }}
           >
-            {loading ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
-          </Button>
+            {mode === "login" ? "Sign In" : "Create Account"}
+          </h2>
+
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="auth-email">Email</Label>
+              <Input
+                id="auth-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="auth-password">Password</Label>
+              <Input
+                id="auth-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete={mode === "register" ? "new-password" : "current-password"}
+                minLength={mode === "register" ? 8 : undefined}
+              />
+            </div>
+
+            {error && (
+              <p className="text-sm" style={{ color: "var(--error, #f87171)" }} role="alert">
+                {error}
+              </p>
+            )}
+
+            <Button type="submit" disabled={loading} className="w-full">
+              {loading ? "…" : mode === "login" ? "Sign In" : "Create Account"}
+            </Button>
+          </form>
+
+          <p className="text-xs text-center" style={{ color: "var(--cream-muted)" }}>
+            {mode === "login" ? "No account yet? " : "Already have an account? "}
+            <button
+              type="button"
+              className="underline"
+              onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(null); }}
+            >
+              {mode === "login" ? "Create one" : "Sign in"}
+            </button>
+          </p>
         </div>
-
-        <p className="mt-4 text-center text-sm text-zinc-500">
-          {mode === "login" ? (
-            <>No account?{" "}
-              <button
-                onClick={() => { setMode("register"); setError(null); }}
-                className="text-zinc-300 underline hover:text-white"
-              >Register</button></>
-          ) : (
-            <>Already registered?{" "}
-              <button
-                onClick={() => { setMode("login"); setError(null); }}
-                className="text-zinc-300 underline hover:text-white"
-              >Sign in</button></>
-          )}
-        </p>
       </div>
-    </div>
-  );
-}
-```
+    );
+  }
+  ```
 
-- [ ] **Step 2: Verify TypeScript compiles**
+- [ ] **Step 2: TypeScript check**
 
-```bash
-cd frontend && npx tsc --noEmit 2>&1 | head -20
-```
-
-Expected: no errors in `auth-modal.tsx`.
+  ```bash
+  cd frontend && npx tsc --noEmit 2>&1 | head -20
+  ```
+  Expected: no errors for the new file.
 
 - [ ] **Step 3: Commit**
 
-```bash
-git add frontend/src/components/auth-modal.tsx
-git commit -m "feat: add AuthModal component for login/register"
-```
+  ```bash
+  git add frontend/src/components/auth-modal.tsx
+  git commit -m "feat: add AuthModal login/register component"
+  ```
 
 ---
 
-## Task 13: Frontend — update use-long-form-stream.tsx
+## Task 13: Frontend — use-long-form-stream.tsx auth integration
 
 **Files:**
 - Modify: `frontend/src/components/use-long-form-stream.tsx`
 
-- [ ] **Step 1: Add `rate_limited` and `unauthorized` to `StreamStatus`**
+- [ ] **Step 1: Read the current file in full**
 
-Find and replace the `StreamStatus` type:
+  Read `frontend/src/components/use-long-form-stream.tsx` before editing.
 
-```typescript
-// BEFORE
-export type StreamStatus =
-  | { code: "ready" }
-  | { code: "connecting" }
-  | { code: "outline_ready" }
-  | { code: "writing_chapter"; chapter: number }
-  | { code: "revising_chapter"; chapter: number; attempt: number }
-  | { code: "complete" }
-  | { code: "error" }
-  | { code: "backend"; message: string };
+- [ ] **Step 2: Add new StreamStatus variants**
 
-// AFTER
-export type StreamStatus =
-  | { code: "ready" }
-  | { code: "connecting" }
-  | { code: "outline_ready" }
-  | { code: "writing_chapter"; chapter: number }
-  | { code: "revising_chapter"; chapter: number; attempt: number }
-  | { code: "complete" }
-  | { code: "error" }
-  | { code: "backend"; message: string }
-  | { code: "rate_limited"; retryAfter: string }
-  | { code: "unauthorized" };
-```
+  Find the `StreamStatus` type union. Add two new variants:
+  ```ts
+  | { code: "rate_limited"; retry_after: string }
+  | { code: "unauthenticated" }
+  ```
 
-- [ ] **Step 2: Add `token` to `GenerateLongFormArgs`**
+- [ ] **Step 3: Add token to GenerateLongFormArgs**
 
-Find and replace the interface:
+  Find the `GenerateLongFormArgs` type and add:
+  ```ts
+  token?: string | null;
+  ```
 
-```typescript
-// BEFORE
-interface GenerateLongFormArgs {
-  draft: StoryDraftInput;
-  providerConfig: ProviderConfig;
-  chapterCount: number;
-  chapterWordTarget: number;
-}
+- [ ] **Step 4: Update the fetch call to include the Authorization header**
 
-// AFTER
-interface GenerateLongFormArgs {
-  draft: StoryDraftInput;
-  providerConfig: ProviderConfig;
-  chapterCount: number;
-  chapterWordTarget: number;
-  token: string;
-}
-```
+  In the `generateLongForm` callback, find the `fetch(ENDPOINT, { ... })` call. Update the `headers` object:
+  ```ts
+  headers: {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  },
+  ```
 
-- [ ] **Step 3: Thread `token` into `generateLongForm`**
+- [ ] **Step 5: Replace the generic !response.ok block with specific 401/429 handling**
 
-In `generateLongForm`, add `token` to the destructure:
+  Find the `if (!response.ok)` block immediately after the `fetch` call and replace it:
+  ```ts
+  if (response.status === 401) {
+    setStreamStatus({ code: "unauthenticated" });
+    setIsStreaming(false);
+    return;
+  }
+  if (response.status === 429) {
+    const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const retry_after = typeof body?.retry_after === "string" ? body.retry_after : "";
+    setStreamStatus({ code: "rate_limited", retry_after });
+    setIsStreaming(false);
+    return;
+  }
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}.`);
+  }
+  ```
 
-```typescript
-// BEFORE
-  const generateLongForm = useCallback(async ({
-    draft,
-    providerConfig,
-    chapterCount,
-    chapterWordTarget,
-  }: GenerateLongFormArgs): Promise<void> => {
+- [ ] **Step 6: Add token to the useCallback destructuring**
 
-// AFTER
-  const generateLongForm = useCallback(async ({
-    draft,
-    providerConfig,
-    chapterCount,
-    chapterWordTarget,
-    token,
-  }: GenerateLongFormArgs): Promise<void> => {
-```
+  Find the `useCallback` destructuring of args and add `token`:
+  ```ts
+  const { draft, providerConfig, chapterCount, chapterWordTarget, token } = /* args */;
+  ```
+  Follow the exact existing pattern for how args are accessed.
 
-- [ ] **Step 4: Pass `Authorization` header and handle 401/429**
+- [ ] **Step 7: TypeScript check**
 
-Find and replace the fetch call and its immediate error check:
+  ```bash
+  cd frontend && npx tsc --noEmit 2>&1 | head -30
+  ```
+  Expected: no new errors.
 
-```typescript
-// BEFORE
-      const response = await fetch(ENDPOINT, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(payload),
-        signal:  controller.signal,
-      });
+- [ ] **Step 8: Commit**
 
-      if (!response.ok) {
-        throw new Error(`Request failed with status ${response.status}.`);
-      }
-
-// AFTER
-      const response = await fetch(ENDPOINT, {
-        method:  "POST",
-        headers: {
-          "Content-Type":  "application/json",
-          "Authorization": `Bearer ${token}`,
-        },
-        body:    JSON.stringify(payload),
-        signal:  controller.signal,
-      });
-
-      if (response.status === 401) {
-        setStreamStatus({ code: "unauthorized" });
-        return;
-      }
-
-      if (response.status === 429) {
-        const body = await response.json() as { retry_after?: string };
-        setStreamStatus({ code: "rate_limited", retryAfter: body.retry_after ?? "" });
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error(`Request failed with status ${response.status}.`);
-      }
-```
-
-- [ ] **Step 5: Verify TypeScript compiles**
-
-```bash
-cd frontend && npx tsc --noEmit 2>&1 | head -20
-```
-
-Expected: no errors.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add frontend/src/components/use-long-form-stream.tsx
-git commit -m "feat: pass Authorization header and handle 401/429 in stream hook"
-```
+  ```bash
+  git add frontend/src/components/use-long-form-stream.tsx
+  git commit -m "feat: add auth header, rate_limited and unauthenticated stream statuses"
+  ```
 
 ---
 
-## Task 14: Frontend — update vibe-controller.tsx
+## Task 14: Frontend — vibe-controller.tsx auth integration
 
 **Files:**
 - Modify: `frontend/src/components/vibe-controller.tsx`
 
-- [ ] **Step 1: Check existing imports at the top of the file**
+- [ ] **Step 1: Read the current file in full**
 
-Open `frontend/src/components/vibe-controller.tsx` and check which of these are already imported. Add any that are missing:
+  Read `frontend/src/components/vibe-controller.tsx` before editing.
 
-```typescript
-import { useEffect, useState } from "react";   // useState likely present; add useEffect if missing
-import { AuthModal } from "@/components/auth-modal";
-```
+- [ ] **Step 2: Add useEffect to existing react import and add AuthModal import**
 
-- [ ] **Step 2: Add token state inside the `VibeController` function body**
+  Update the `react` import line to include `useEffect` if not already there:
+  ```tsx
+  import { useEffect, useMemo, useState } from "react";
+  ```
 
-Inside the component, before the first existing `useState` call, add:
+  Add the `AuthModal` import alongside other component imports:
+  ```tsx
+  import { AuthModal } from "@/components/auth-modal";
+  ```
 
-```typescript
-  const [token, setToken] = useState<string | null>(null);
+- [ ] **Step 3: Add token state**
 
+  Inside the main component, add after the other `useState` declarations:
+  ```tsx
+  const [token, setToken] = useState<string | null>(() =>
+    typeof window !== "undefined" ? localStorage.getItem("lf_token") : null
+  );
+  ```
+
+- [ ] **Step 4: Clear token when stream returns unauthenticated**
+
+  Add a `useEffect` inside the component:
+  ```tsx
   useEffect(() => {
-    const stored = localStorage.getItem("lf_token");
-    if (stored) setToken(stored);
-  }, []);
+    if (streamStatus.code === "unauthenticated") {
+      localStorage.removeItem("lf_token");
+      setToken(null);
+    }
+  }, [streamStatus.code]);
+  ```
 
-  const handleAuthenticated = (newToken: string) => setToken(newToken);
+- [ ] **Step 5: Render AuthModal when no token**
 
-  const handleLogout = () => {
-    localStorage.removeItem("lf_token");
-    setToken(null);
-  };
-```
+  At the very top of the returned JSX (before the outermost wrapper, or as its first child):
+  ```tsx
+  {!token && (
+    <AuthModal onAuthenticated={(t) => setToken(t)} />
+  )}
+  ```
 
-- [ ] **Step 3: Show `AuthModal` when unauthenticated**
+- [ ] **Step 6: Pass token to generateLongForm**
 
-At the very top of the component's returned JSX (just inside the outermost `<div>` or fragment), add:
+  Find the call to `generateLongForm({ ... })` and add `token`:
+  ```tsx
+  generateLongForm({ draft, providerConfig, chapterCount, chapterWordTarget, token })
+  ```
 
-```tsx
-    {!token && <AuthModal onAuthenticated={handleAuthenticated} />}
-```
+- [ ] **Step 7: Show rate-limit message**
 
-- [ ] **Step 4: Pass `token` to `generateLongForm`**
-
-Find the call to `generateLongForm(...)` and add `token: token ?? ""` to the args object passed in.
-
-- [ ] **Step 5: Display rate limit and unauthorized messages**
-
-Find the area where `streamStatus` drives UI feedback (look for `streamError` display or `streamStatus.code === "error"`). Add adjacent to that:
-
-```tsx
-    {streamStatus.code === "rate_limited" && (
-      <p className="text-sm text-amber-400">
-        Limit reached. Try again at{" "}
-        {new Date(streamStatus.retryAfter).toLocaleTimeString([], {
-          hour:   "2-digit",
+  Find where stream status messages are rendered (near `streamStatus.code === "error"` or the status text area). Add:
+  ```tsx
+  {streamStatus.code === "rate_limited" && (() => {
+    const retryTime = streamStatus.retry_after
+      ? new Date(streamStatus.retry_after).toLocaleTimeString([], {
+          hour: "2-digit",
           minute: "2-digit",
           hour12: false,
-        })}
-        .
+        })
+      : "later";
+    return (
+      <p className="text-sm" style={{ color: "var(--error, #f87171)" }}>
+        Limit reached. Try again at {retryTime}.
       </p>
-    )}
-    {streamStatus.code === "unauthorized" && (
-      <p className="text-sm text-red-400">
-        Session expired.{" "}
-        <button onClick={handleLogout} className="underline">
-          Sign in again
-        </button>
-      </p>
-    )}
-```
+    );
+  })()}
+  ```
 
-- [ ] **Step 6: Verify TypeScript compiles and lint passes**
+- [ ] **Step 8: TypeScript check + lint**
 
-```bash
-cd frontend && npx tsc --noEmit && npm run lint
-```
+  ```bash
+  cd frontend && npx tsc --noEmit 2>&1 | head -30 && npm run lint 2>&1 | tail -20
+  ```
+  Expected: no new errors.
 
-Expected: no errors.
+- [ ] **Step 9: Commit**
 
-- [ ] **Step 7: Commit**
-
-```bash
-git add frontend/src/components/vibe-controller.tsx
-git commit -m "feat: add auth gate and rate limit display to VibeController"
-```
+  ```bash
+  git add frontend/src/components/vibe-controller.tsx
+  git commit -m "feat: integrate auth modal and rate-limit message into VibeController"
+  ```
 
 ---
 
-## Task 15: Frontend E2E tests
+## Task 15: E2E Playwright tests
 
 **Files:**
-- Modify: `frontend/e2e/long-story-generation.spec.ts`
+- Create: `frontend/e2e/auth.spec.ts`
 
-- [ ] **Step 1: Add `data-testid` attributes if missing**
+- [ ] **Step 1: Write Playwright tests**
 
-Check `vibe-controller.tsx` for `data-testid="story-prompt"` on the story Textarea and `data-testid="generate-button"` on the generate Button. Add them if absent — the E2E tests rely on them.
+  Create `frontend/e2e/auth.spec.ts`:
+  ```ts
+  import { test, expect } from "@playwright/test";
 
-- [ ] **Step 2: Add rate limit and unauthorized describe block**
+  test.describe("Auth modal", () => {
+    test("shows login form when no token is stored", async ({ page }) => {
+      await page.goto("/");
+      await page.evaluate(() => localStorage.removeItem("lf_token"));
+      await page.reload();
 
-Append a new `describe` block to `frontend/e2e/long-story-generation.spec.ts`:
-
-```typescript
-describe("auth and rate limiting", () => {
-  test("shows rate limit message when backend returns 429", async ({ page }) => {
-    await page.goto("/");
-    // Pre-seed localStorage so AuthModal does not appear
-    await page.evaluate(() => localStorage.setItem("lf_token", "fake.jwt.token"));
-    await page.reload();
-
-    // Intercept story generation with a 429 response
-    const retryAfter = new Date(Date.now() + 45 * 60 * 1000).toISOString();
-    await page.route("**/api/v1/stories/generate-long-form", async route => {
-      await route.fulfill({
-        status: 429,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "Rate limit exceeded", retry_after: retryAfter }),
-      });
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await expect(page.getByLabelText("Email")).toBeVisible();
+      await expect(page.getByLabelText("Password")).toBeVisible();
     });
-
-    await page.fill('[data-testid="story-prompt"]', "A lone wanderer");
-    await page.click('[data-testid="generate-button"]');
-
-    await expect(page.getByText(/Limit reached\. Try again at/)).toBeVisible();
   });
 
-  test("shows session expired prompt when backend returns 401", async ({ page }) => {
-    await page.goto("/");
-    await page.evaluate(() => localStorage.setItem("lf_token", "expired.jwt.token"));
-    await page.reload();
-
-    await page.route("**/api/v1/stories/generate-long-form", async route => {
-      await route.fulfill({
-        status: 401,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "Token has expired" }),
+  test.describe("Rate limit message", () => {
+    test("shows 'Limit reached' message on 429 response", async ({ page }) => {
+      await page.route("**/api/v1/stories/generate-long-form", async (route) => {
+        await route.fulfill({
+          status: 429,
+          contentType: "application/json",
+          headers: { "Retry-After": "Thu, 19 Mar 2026 15:32:00 GMT" },
+          body: JSON.stringify({
+            detail: "Rate limit exceeded",
+            retry_after: "2026-03-19T15:32:00Z",
+          }),
+        });
       });
+
+      await page.goto("/");
+      await page.evaluate(() => localStorage.setItem("lf_token", "fake.jwt.token"));
+      await page.reload();
+
+      // Adjust selector to the actual generate button text in VibeController
+      const generateBtn = page.getByRole("button", { name: /generate/i }).first();
+      await generateBtn.click();
+
+      await expect(
+        page.getByText(/Limit reached\. Try again at/i)
+      ).toBeVisible({ timeout: 5000 });
     });
 
-    await page.fill('[data-testid="story-prompt"]', "A lone wanderer");
-    await page.click('[data-testid="generate-button"]');
+    test("clears token and shows login form on 401 response", async ({ page }) => {
+      await page.route("**/api/v1/stories/generate-long-form", async (route) => {
+        await route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Token expired" }),
+        });
+      });
 
-    await expect(page.getByText(/Session expired/)).toBeVisible();
+      await page.goto("/");
+      await page.evaluate(() => localStorage.setItem("lf_token", "expired.jwt.token"));
+      await page.reload();
+
+      const generateBtn = page.getByRole("button", { name: /generate/i }).first();
+      await generateBtn.click();
+
+      await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5000 });
+    });
   });
-});
-```
+  ```
 
-- [ ] **Step 3: Run E2E tests**
+- [ ] **Step 2: Run E2E tests**
 
-```bash
-cd frontend && npm run e2e
-```
+  ```bash
+  cd frontend && npm run e2e -- auth.spec.ts
+  ```
+  Expected: tests pass. If the generate button selector does not match, run with `npm run e2e:headed` to inspect the DOM and update the selector.
 
-Expected: new tests pass.
+- [ ] **Step 3: Commit**
 
-- [ ] **Step 4: Commit**
-
-```bash
-git add frontend/e2e/long-story-generation.spec.ts
-git commit -m "test: add E2E tests for 429 rate limit and 401 session expiry"
-```
+  ```bash
+  git add frontend/e2e/auth.spec.ts
+  git commit -m "test: E2E tests for auth modal and 429/401 handling"
+  ```
 
 ---
 
-## Final verification
+## Task 16: Smoke verification
 
-```bash
-# All backend unit tests (no integration)
-cd backend && ../.venv/bin/pytest tests/ -v --ignore=tests/test_auth_integration.py
+- [ ] **Step 1: Run all backend unit tests (no DB required)**
 
-# Frontend lint + type check
-cd frontend && npm run lint && npx tsc --noEmit
+  ```bash
+  cd backend && JWT_SECRET=test ../.venv/bin/pytest tests/ -v \
+    --ignore=tests/test_auth_integration.py \
+    --ignore=tests/test_real_provider_smoke.py
+  ```
+  Expected: all tests pass.
 
-# Frontend E2E
-cd frontend && npm run e2e
-```
+- [ ] **Step 2: Run backend integration tests (real DB required)**
+
+  ```bash
+  cd backend && JWT_SECRET=integration-test-secret-do-not-use-in-prod \
+    DATABASE_URL='postgresql+asyncpg://mikha:postgres@127.0.0.1:5432/loreforge' \
+    ../.venv/bin/pytest tests/test_auth_integration.py -v -m integration
+  ```
+  Expected: all tests pass.
+
+- [ ] **Step 3: Frontend lint + type check**
+
+  ```bash
+  cd frontend && npm run lint && npx tsc --noEmit
+  ```
+  Expected: no errors.
+
+- [ ] **Step 4: Verify auth guard is active**
+
+  ```bash
+  make smoke-stream 2>&1 | grep -E "401|Unauthorized"
+  ```
+  Expected: 401 response — confirms the generation endpoint now requires authentication.
