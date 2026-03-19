@@ -26,8 +26,8 @@ describe("t() fallback to en", () => {
     expect(t("uk", "vibe.briefing.sectionLabel")).toBe("Інструкції до історії");
   });
 
-  it("falls back to en for empty-string values", () => {
-    // moralityModifier.balanced is "" in both — fallback to en also returns ""
+  it("returns empty string when both locales have empty string value", () => {
+    // moralityModifier.balanced is "" in both en and uk — t() returns "" (not the key string)
     expect(t("uk", "vibe.tones.moralityModifier.balanced")).toBe("");
   });
 
