@@ -1,9 +1,16 @@
 import {
   bandForNormalizedValue,
   normalizeSliderValue,
-  toneLabelMap,
+  type MetricBand,
   type VibeValues,
 } from "./vibe-bands";
+
+/* Local fallback tone labels used only for buildPreviewTitle (no locale available here) */
+const _previewToneMap: Record<"aggression" | "readerRespect" | "morality", Record<MetricBand, string>> = {
+  aggression:   { strongly_minimized: "Gentle", restrained: "Measured", balanced: "Tense", elevated: "Forceful", dominant: "Combustive" },
+  readerRespect:{ strongly_minimized: "Provocative", restrained: "Spare", balanced: "Balanced", elevated: "Trusting", dominant: "Expert-facing" },
+  morality:     { strongly_minimized: "Amoral", restrained: "Ambiguous", balanced: "Textured", elevated: "Principled", dominant: "Righteous" },
+};
 
 export const GENRE_OPTIONS = [
   "Fantasy",
@@ -111,7 +118,7 @@ export const buildPreviewTitle = (values: VibeValues, publicTitle?: string): str
   const respectBand = bandForNormalizedValue(normalizeSliderValue(values.readerRespect));
   const moralityBand = bandForNormalizedValue(normalizeSliderValue(values.morality));
 
-  return `${toneLabelMap.aggression[aggressionBand]} / ${toneLabelMap.readerRespect[respectBand]} / ${toneLabelMap.morality[moralityBand]}`;
+  return `${_previewToneMap.aggression[aggressionBand]} / ${_previewToneMap.readerRespect[respectBand]} / ${_previewToneMap.morality[moralityBand]}`;
 };
 
 const buildDefaultPrompt = (values: VibeValues, language: string): string => {
