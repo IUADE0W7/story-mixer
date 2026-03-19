@@ -7,7 +7,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,6 +20,7 @@ from app.services.long_form_orchestrator import LongFormOrchestrator
 from app.services.model_factory import verify_ollama_connectivity
 from app.services.outline_agent import LocalOutlineAgent, StructuredOutlineAgent
 from app.services.provider_gateway import HybridLangChainGateway, LocalStubGateway
+from app.api.deps import check_rate_limit
 
 router = APIRouter(prefix="/stories", tags=["stories"])
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ def _ollama_user_message() -> str:
 @router.post("/generate-long-form")
 async def generate_long_form_story(
     request: LongFormRequest,
+    _rate_limit: None = Depends(check_rate_limit),
 ) -> StreamingResponse:
     """Stream a multi-chapter story through the outline → write → critic pipeline."""
 

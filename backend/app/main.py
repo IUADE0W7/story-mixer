@@ -9,7 +9,10 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
+from app.api.deps import RateLimitExceeded
+from app.api.v1.auth import router as auth_router
 from app.api.v1.stories import router as stories_router
 from app.config import settings
 from app.persistence.db import engine
@@ -38,6 +41,18 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
     app.include_router(stories_router, prefix="/api/v1")
+    app.include_router(auth_router, prefix="/api/v1")
+
+    @app.exception_handler(RateLimitExceeded)
+    async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": exc.retry_after.strftime("%a, %d %b %Y %H:%M:%S GMT")},
+            content={
+                "detail": "Rate limit exceeded",
+                "retry_after": exc.retry_after.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        )
 
     @app.middleware("http")
     async def _log_requests(request: Request, call_next):
