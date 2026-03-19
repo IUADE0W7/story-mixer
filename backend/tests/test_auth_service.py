@@ -1,32 +1,83 @@
-"""Unit tests for auth_service — password hashing and JWT operations."""
+"""Unit tests for auth_service — Google credential verification and JWT operations."""
 
 from __future__ import annotations
 
 import os
+from unittest.mock import patch
 
 import pytest
 
 os.environ["JWT_SECRET"] = "test-secret-for-unit-tests-only"
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
 
-from app.services.auth_service import hash_password, issue_token, verify_password, verify_token
+from app.services.auth_service import issue_token, verify_google_credential, verify_token
 
+# ── verify_google_credential ──────────────────────────────────────────────────
 
-def test_hash_returns_bcrypt_string() -> None:
-    h = hash_password("mypassword")
-    assert h.startswith("$2b$") or h.startswith("$2a$")
-
-
-def test_hash_is_not_plaintext() -> None:
-    assert hash_password("mypassword") != "mypassword"
-
-
-def test_verify_correct_password() -> None:
-    assert verify_password("correct_horse", hash_password("correct_horse")) is True
+VALID_PAYLOAD = {
+    "sub": "google-user-123",
+    "email": "user@gmail.com",
+    "email_verified": True,
+    "name": "Test User",
+    "picture": "https://example.com/avatar.jpg",
+}
 
 
-def test_verify_wrong_password() -> None:
-    assert verify_password("wrong_horse", hash_password("correct_horse")) is False
+@pytest.mark.asyncio
+async def test_verify_google_credential_returns_payload() -> None:
+    with patch("google.oauth2.id_token.verify_oauth2_token", return_value=VALID_PAYLOAD):
+        result = await verify_google_credential("fake-credential")
+    assert result["sub"] == "google-user-123"
+    assert result["email"] == "user@gmail.com"
 
+
+@pytest.mark.asyncio
+async def test_verify_google_credential_raises_on_invalid_token() -> None:
+    with patch(
+        "google.oauth2.id_token.verify_oauth2_token",
+        side_effect=ValueError("Token is invalid"),
+    ):
+        with pytest.raises(ValueError, match="Token is invalid"):
+            await verify_google_credential("bad-token")
+
+
+@pytest.mark.asyncio
+async def test_verify_google_credential_raises_on_google_auth_error() -> None:
+    from google.auth.exceptions import GoogleAuthError
+
+    with patch(
+        "google.oauth2.id_token.verify_oauth2_token",
+        side_effect=GoogleAuthError("auth error"),
+    ):
+        with pytest.raises(ValueError, match="auth error"):
+            await verify_google_credential("bad-token")
+
+
+@pytest.mark.asyncio
+async def test_verify_google_credential_raises_when_email_not_verified() -> None:
+    payload = {**VALID_PAYLOAD, "email_verified": False}
+    with patch("google.oauth2.id_token.verify_oauth2_token", return_value=payload):
+        with pytest.raises(ValueError, match="email is not verified"):
+            await verify_google_credential("fake-credential")
+
+
+@pytest.mark.asyncio
+async def test_verify_google_credential_raises_when_sub_missing() -> None:
+    payload = {**VALID_PAYLOAD, "sub": ""}
+    with patch("google.oauth2.id_token.verify_oauth2_token", return_value=payload):
+        with pytest.raises(ValueError, match="missing subject"):
+            await verify_google_credential("fake-credential")
+
+
+@pytest.mark.asyncio
+async def test_verify_google_credential_raises_when_email_missing() -> None:
+    payload = {k: v for k, v in VALID_PAYLOAD.items() if k != "email"}
+    with patch("google.oauth2.id_token.verify_oauth2_token", return_value=payload):
+        with pytest.raises(ValueError, match="missing email"):
+            await verify_google_credential("fake-credential")
+
+
+# ── issue_token / verify_token (unchanged) ────────────────────────────────────
 
 def test_issue_token_returns_string() -> None:
     token = issue_token("user-123", "a@b.com")
