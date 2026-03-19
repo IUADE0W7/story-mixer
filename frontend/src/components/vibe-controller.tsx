@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ import {
   PROVIDER_OPTIONS,
   type ProviderConfig,
 } from "@/lib/story-streaming";
+import { AuthModal } from "@/components/auth-modal";
 import { useLongFormStream, type ChapterState, type StreamStatus } from "@/components/use-long-form-stream";
 import { AgentInteractionLog } from "@/components/agent-interaction-log";
 import { downloadStoryAsPdf } from "@/lib/story-pdf";
@@ -341,6 +342,8 @@ function formatStreamStatus(status: StreamStatus, t: (key: import("@/locales/ind
     case "complete":         return t("vibe.status.streamComplete");
     case "error":            return t("vibe.status.streamError");
     case "backend":          return status.message;
+    case "rate_limited":     return "Rate limit reached";
+    case "unauthenticated":  return "Not authenticated";
   }
 }
 
@@ -358,6 +361,9 @@ export function VibeController({
   const [chapterWords, setChapterWords]   = useState(400);
   const [langBannerDismissed, setLangBannerDismissed] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(() =>
+    typeof window !== "undefined" ? localStorage.getItem("lf_token") : null
+  );
 
   /* Derived title from two source tales */
   const combinedTitle = [sourceTaleA.trim(), sourceTaleB.trim()].filter(Boolean).join(" × ");
@@ -380,6 +386,13 @@ export function VibeController({
     generateLongForm,
     reset: resetLongForm,
   } = useLongFormStream();
+
+  useEffect(() => {
+    if (lfStatus.code === "unauthenticated") {
+      localStorage.removeItem("lf_token");
+      setToken(null);
+    }
+  }, [lfStatus.code]);
 
   const previewTitle  = useMemo(() => buildPreviewTitle(values, combinedTitle), [values, combinedTitle]);
 
@@ -415,11 +428,15 @@ export function VibeController({
       providerConfig,
       chapterCount,
       chapterWordTarget: chapterWords,
+      token,
     });
   };
 
   return (
     <div className="space-y-4">
+      {!token && (
+        <AuthModal onAuthenticated={(t) => setToken(t)} />
+      )}
 
       {/* ── Story Briefing ── */}
       <Section
@@ -995,6 +1012,20 @@ export function VibeController({
             </span>
           )}
         </button>
+        {lfStatus.code === "rate_limited" && (() => {
+          const retryTime = lfStatus.retry_after
+            ? new Date(lfStatus.retry_after).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+              })
+            : "later";
+          return (
+            <p className="text-sm" style={{ color: "var(--error, #f87171)" }}>
+              Limit reached. Try again at {retryTime}.
+            </p>
+          );
+        })()}
         {validationError ? (
           <p
             className="text-xs text-center"

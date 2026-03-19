@@ -19,7 +19,9 @@ export type StreamStatus =
   | { code: "revising_chapter"; chapter: number; attempt: number }
   | { code: "complete" }
   | { code: "error" }
-  | { code: "backend"; message: string };
+  | { code: "backend"; message: string }
+  | { code: "rate_limited"; retry_after: string }
+  | { code: "unauthenticated" };
 
 export interface AgentLogEntry {
   timestamp: string;
@@ -45,6 +47,7 @@ interface GenerateLongFormArgs {
   providerConfig: ProviderConfig;
   chapterCount: number;
   chapterWordTarget: number;
+  token?: string | null;
 }
 
 interface UseLongFormStreamResult {
@@ -83,6 +86,7 @@ export function useLongFormStream(): UseLongFormStreamResult {
     providerConfig,
     chapterCount,
     chapterWordTarget,
+    token,
   }: GenerateLongFormArgs): Promise<void> => {
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -105,11 +109,26 @@ export function useLongFormStream(): UseLongFormStreamResult {
     try {
       const response = await fetch(ENDPOINT, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body:    JSON.stringify(payload),
         signal:  controller.signal,
       });
 
+      if (response.status === 401) {
+        setStreamStatus({ code: "unauthenticated" });
+        setIsStreaming(false);
+        return;
+      }
+      if (response.status === 429) {
+        const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+        const retry_after = typeof body?.retry_after === "string" ? body.retry_after : "";
+        setStreamStatus({ code: "rate_limited", retry_after });
+        setIsStreaming(false);
+        return;
+      }
       if (!response.ok) {
         throw new Error(`Request failed with status ${response.status}.`);
       }
