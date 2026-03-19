@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useLanguage } from "@/lib/language-context";
 import type { AgentLogEntry } from "./use-long-form-stream";
 
 const AGENT_COLORS: Record<string, string> = {
@@ -27,6 +28,7 @@ interface AgentInteractionLogProps {
 }
 
 export function AgentInteractionLog({ entries }: AgentInteractionLogProps) {
+  const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -74,7 +76,7 @@ export function AgentInteractionLog({ entries }: AgentInteractionLogProps) {
             className="lf-section-label"
             style={{ color: "var(--teal)" }}
           >
-            Agent Interaction Log
+            {t("ui.agentLog.title")}
           </span>
           {entries.length > 0 && (
             <span
@@ -124,7 +126,7 @@ export function AgentInteractionLog({ entries }: AgentInteractionLogProps) {
               className="text-center py-6"
               style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--cream-faint)" }}
             >
-              No interactions recorded yet — start generation to see the agent pipeline.
+              {t("ui.agentLog.empty")}
             </p>
           ) : (
             <div className="space-y-1">

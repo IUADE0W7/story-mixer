@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { VibeController } from "@/components/vibe-controller";
+import { useLanguage } from "@/lib/language-context";
 import type { VibeValues } from "@/lib/vibe-bands";
 
 const DEFAULT_VIBE: VibeValues = { aggression: 5, readerRespect: 6, morality: 5, sourceFidelity: 7 };
@@ -54,6 +55,7 @@ function MixerLogo({ size = 44 }: { size?: number }) {
 }
 
 export default function HomePage() {
+  const { t } = useLanguage();
   const [values, setValues] = useState<VibeValues>(DEFAULT_VIBE);
 
   return (
@@ -74,13 +76,13 @@ export default function HomePage() {
               className="lf-display leading-none"
               style={{ fontSize: "1.6rem", color: "var(--cream)" }}
             >
-              Story Mixer
+              {t("ui.header.title")}
             </h1>
             <p
               className="lf-section-label mt-0.5"
               style={{ color: "var(--teal)", letterSpacing: "0.2em" }}
             >
-              LoreForge &mdash; Calibrated Narrative
+              {t("ui.header.subtitle")}
             </p>
           </div>
         </div>
@@ -101,7 +103,7 @@ export default function HomePage() {
             />
           </div>
           <span className="lf-section-label" style={{ color: "var(--cream-muted)" }}>
-            Studio ready
+            {t("ui.header.studioReady")}
           </span>
         </div>
       </header>
@@ -130,7 +132,7 @@ export default function HomePage() {
         style={{ borderTop: "1px solid var(--border)" }}
       >
         <p className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-          LoreForge &nbsp;·&nbsp; Calibrated narrative generation &nbsp;·&nbsp; tune the vibe, brew the story
+          {t("ui.footer.tagline")}
         </p>
       </footer>
     </div>
