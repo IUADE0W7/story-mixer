@@ -72,6 +72,7 @@ class AppSettings(BaseSettings):
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
+    google_client_id: str = ""
     ollama_base_url: str = Field(default_factory=_default_ollama_base_url)
     # Logging level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     log_level: str = "INFO"
