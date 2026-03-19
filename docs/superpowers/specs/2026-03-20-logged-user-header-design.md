@@ -19,19 +19,25 @@ Display the authenticated user's email in the app header (top-right), alongside 
 
 Move `token` state from `VibeController` up to `HomePage`:
 
-- Initialize from `localStorage.getItem("lf_token")` (same as current)
-- Add a `decodeEmail(token: string): string | null` pure helper that base64-decodes the JWT payload segment and returns `.email`
-- Pass `token` and `onAuthenticated` as props into `VibeController`
+- Initialize with a lazy `useState` initializer that guards against SSR:
+  ```ts
+  const [token, setToken] = useState<string | null>(() =>
+    typeof window !== "undefined" ? localStorage.getItem("lf_token") : null
+  );
+  ```
+- Add a `decodeEmail(token: string): string | null` module-level pure helper (defined outside the component body so it is not re-created on each render) that base64-decodes the JWT payload segment and returns `.email`
+- Pass `token` and `onTokenChange` as props into `VibeController`
 
 ### Header — `page.tsx`
 
 When `token` is set, render the decoded email to the left of the "Studio Ready" pip:
 
 ```
-[email] • [pip] Studio Ready
+[email] <aria-hidden>•</aria-hidden> [pip] Studio Ready
 ```
 
 - Styled with `lf-section-label` class and `color: var(--cream-muted)` — consistent with the pip label
+- The bullet separator `•` carries `aria-hidden="true"` so screen readers skip it
 - No sign-out button in this iteration
 
 ### `VibeController` props
@@ -40,29 +46,32 @@ Add two new props:
 
 ```ts
 token: string | null
-onAuthenticated: (token: string) => void
+onTokenChange: (token: string | null) => void
 ```
 
-Remove internal `token` useState and localStorage initialization. Keep AuthModal trigger, 401 handler (`localStorage.removeItem` + call parent's setter with `null`), and stream logic unchanged.
+The prop is named `onTokenChange` (not `onAuthenticated`) to accurately reflect that it is called with both a new token (on login) and `null` (on 401 logout). Remove internal `token` useState and localStorage initialization. Keep AuthModal trigger, 401 handler (`localStorage.removeItem` + `onTokenChange(null)`), and stream logic unchanged.
 
 ## Data flow
 
 ```
 HomePage (owns token state)
   ├── header → decodeEmail(token) → renders email
-  └── VibeController(token, onAuthenticated)
-        ├── AuthModal → onAuthenticated(newToken) → sets state in HomePage
+  └── VibeController(token, onTokenChange)
+        ├── AuthModal → onTokenChange(newToken) → sets state in HomePage
+        └── 401 handler → onTokenChange(null) → clears state in HomePage
         └── stream logic uses token prop
 ```
 
 ## JWT decoding
 
-No library needed. The JWT middle segment is standard base64url:
+Module-level helper, no library needed. The JWT middle segment is standard base64url — re-padded before passing to `atob` to handle JWTs that omit trailing `=` characters:
 
 ```ts
 function decodeEmail(token: string): string | null {
   try {
-    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    const seg = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = seg + "=".repeat((4 - (seg.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded));
     return typeof payload.email === "string" ? payload.email : null;
   } catch {
     return null;
@@ -73,17 +82,18 @@ function decodeEmail(token: string): string | null {
 ## Error handling
 
 - Malformed JWT → `decodeEmail` returns `null` → email not shown, no crash
-- Token cleared on 401 → `onAuthenticated` receives `null`-equivalent → VibeController calls parent setter → email disappears, AuthModal reappears
+- Token cleared on 401 → VibeController calls `onTokenChange(null)` → `token` in HomePage becomes `null` → email disappears, AuthModal reappears
 
 ## Files changed
 
 | File | Change |
 |------|--------|
-| `frontend/src/app/page.tsx` | Add token state, decodeEmail, email in header, pass props to VibeController |
-| `frontend/src/components/vibe-controller.tsx` | Accept token + onAuthenticated as props, remove internal token state |
+| `frontend/src/app/page.tsx` | Add token state (with SSR guard), module-level `decodeEmail`, email in header, pass `token` + `onTokenChange` props to VibeController |
+| `frontend/src/components/vibe-controller.tsx` | Accept `token` + `onTokenChange` as props, remove internal token state and localStorage read, call `onTokenChange(null)` on 401 |
 
 ## Out of scope
 
 - Sign-out button
 - Avatar / display name
 - `/me` API endpoint
+- Token expiry detection (expired-but-present token will show email until the first API call returns 401)
