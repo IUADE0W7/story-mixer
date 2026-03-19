@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -28,4 +29,37 @@ class StoryRecord(Base):
     low_confidence: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class User(Base):
+    """Registered LoreForge user with bcrypt-hashed password."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (Index("ix_users_email", "email", unique=True),)
+
+
+class GenerationRequest(Base):
+    """Append-only log of story generation attempts used for per-user rate limiting."""
+
+    __tablename__ = "generation_requests"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_generation_requests_user_id_requested_at", "user_id", "requested_at"),
     )
