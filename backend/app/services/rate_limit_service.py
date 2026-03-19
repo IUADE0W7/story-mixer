@@ -53,8 +53,11 @@ async def check_rate_limit_and_record(
                 .order_by(GenerationRequest.requested_at.asc())
                 .limit(1)
             )
-        ).scalar_one()
-        return earliest_at + timedelta(hours=1)
+        ).scalar_one_or_none()
+        if earliest_at is not None:
+            return earliest_at + timedelta(hours=1)
+        # Fallthrough: rows disappeared between COUNT and SELECT (extremely rare race)
+        # treat as under-limit to avoid false 429
 
     db.add(
         GenerationRequest(

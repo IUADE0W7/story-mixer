@@ -14,7 +14,7 @@ os.environ.setdefault("JWT_SECRET", "test-secret")
 from app.services.rate_limit_service import check_rate_limit_and_record
 
 
-def _make_session(user_found: bool, count: int, earliest: datetime | None = None) -> AsyncMock:
+def _make_session(user_found: bool, count: int, earliest: datetime | None = None, limit: int = 10) -> AsyncMock:
     """Build a mock AsyncSession for given scenario."""
     session = AsyncMock()
 
@@ -29,10 +29,10 @@ def _make_session(user_found: bool, count: int, earliest: datetime | None = None
 
     side_effects = [user_result, count_result]
 
-    if count >= 10 and earliest is not None:
+    if count >= limit and earliest is not None:
         # Third execute: SELECT MIN(requested_at)
         earliest_result = MagicMock()
-        earliest_result.scalar_one.return_value = earliest
+        earliest_result.scalar_one_or_none.return_value = earliest
         side_effects.append(earliest_result)
 
     session.execute.side_effect = side_effects
@@ -50,7 +50,7 @@ async def test_under_limit_inserts_row() -> None:
 @pytest.mark.asyncio
 async def test_at_limit_returns_retry_after_and_does_not_insert() -> None:
     earliest = datetime(2026, 3, 19, 14, 32, tzinfo=timezone.utc)
-    session = _make_session(user_found=True, count=10, earliest=earliest)
+    session = _make_session(user_found=True, count=10, earliest=earliest, limit=10)
     result = await check_rate_limit_and_record(session, "user-123", limit=10)
     expected_retry_after = earliest + timedelta(hours=1)
     assert result == expected_retry_after
