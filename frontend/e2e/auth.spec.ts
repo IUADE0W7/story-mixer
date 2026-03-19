@@ -3,6 +3,7 @@ import { test, expect } from "@playwright/test";
 test.describe("Auth modal", () => {
   test("shows login form when no token is stored", async ({ page }) => {
     await page.goto("/");
+    await page.waitForLoadState("domcontentloaded");
     await page.evaluate(() => localStorage.removeItem("lf_token"));
     await page.reload();
 
@@ -27,6 +28,7 @@ test.describe("Rate limit message", () => {
     });
 
     await page.goto("/");
+    await page.waitForLoadState("domcontentloaded");
     await page.evaluate(() => localStorage.setItem("lf_token", "fake.jwt.token"));
     await page.reload();
 
@@ -49,6 +51,7 @@ test.describe("Rate limit message", () => {
     });
 
     await page.goto("/");
+    await page.waitForLoadState("domcontentloaded");
     await page.evaluate(() => localStorage.setItem("lf_token", "expired.jwt.token"));
     await page.reload();
 
