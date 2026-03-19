@@ -158,6 +158,9 @@ const uk: typeof en = {
       streamAttempt: "спроба",
       streamComplete: "Завершено",
       streamError: "Помилка",
+      streamRateLimited: "Ліміт запитів вичерпано",
+      streamUnauthenticated: "Не автентифіковано",
+      rateLimitRetryPrefix: "Ліміт досягнуто. Спробуйте знову о",
     },
     buttons: {
       forgeNarrative: "КУВАТИ НАРРАТИВ",

@@ -342,8 +342,8 @@ function formatStreamStatus(status: StreamStatus, t: (key: import("@/locales/ind
     case "complete":         return t("vibe.status.streamComplete");
     case "error":            return t("vibe.status.streamError");
     case "backend":          return status.message;
-    case "rate_limited":     return "Rate limit reached";
-    case "unauthenticated":  return "Not authenticated";
+    case "rate_limited":     return t("vibe.status.streamRateLimited");
+    case "unauthenticated":  return t("vibe.status.streamUnauthenticated");
   }
 }
 
@@ -1022,7 +1022,7 @@ export function VibeController({
             : "later";
           return (
             <p className="text-sm" style={{ color: "var(--error, #f87171)" }}>
-              Limit reached. Try again at {retryTime}.
+              {t("vibe.status.rateLimitRetryPrefix")} {retryTime}.
             </p>
           );
         })()}

@@ -156,6 +156,9 @@ const en = {
       streamAttempt: "attempt",
       streamComplete: "Complete",
       streamError: "Error",
+      streamRateLimited: "Rate limit reached",
+      streamUnauthenticated: "Not authenticated",
+      rateLimitRetryPrefix: "Limit reached. Try again at",
     },
     buttons: {
       forgeNarrative: "FORGE NARRATIVE",
