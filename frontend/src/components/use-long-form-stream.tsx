@@ -11,6 +11,16 @@ import {
   type StoryDraftInput,
 } from "@/lib/story-streaming";
 
+export type StreamStatus =
+  | { code: "ready" }
+  | { code: "connecting" }
+  | { code: "outline_ready" }
+  | { code: "writing_chapter"; chapter: number }
+  | { code: "revising_chapter"; chapter: number; attempt: number }
+  | { code: "complete" }
+  | { code: "error" }
+  | { code: "backend"; message: string };
+
 export interface AgentLogEntry {
   timestamp: string;
   from: string;
@@ -40,7 +50,7 @@ interface GenerateLongFormArgs {
 interface UseLongFormStreamResult {
   outline: ChapterOutlineEntry[];
   chapters: ChapterState[];
-  streamStatus: string;
+  streamStatus: StreamStatus;
   isStreaming: boolean;
   streamError: string | null;
   agentLog: AgentLogEntry[];
@@ -53,7 +63,7 @@ const ENDPOINT = "/api/v1/stories/generate-long-form";
 export function useLongFormStream(): UseLongFormStreamResult {
   const [outline,      setOutline]      = useState<ChapterOutlineEntry[]>([]);
   const [chapters,     setChapters]     = useState<ChapterState[]>([]);
-  const [streamStatus, setStreamStatus] = useState<string>("Ready");
+  const [streamStatus, setStreamStatus] = useState<StreamStatus>({ code: "ready" });
   const [isStreaming,  setIsStreaming]  = useState(false);
   const [streamError,  setStreamError]  = useState<string | null>(null);
   const [agentLog,     setAgentLog]     = useState<AgentLogEntry[]>([]);
@@ -63,7 +73,7 @@ export function useLongFormStream(): UseLongFormStreamResult {
     abortRef.current?.abort();
     setOutline([]);
     setChapters([]);
-    setStreamStatus("Ready");
+    setStreamStatus({ code: "ready" });
     setStreamError(null);
     setAgentLog([]);
   }, []);
@@ -82,7 +92,7 @@ export function useLongFormStream(): UseLongFormStreamResult {
     setStreamError(null);
     setOutline([]);
     setChapters([]);
-    setStreamStatus("Connecting");
+    setStreamStatus({ code: "connecting" });
     setAgentLog([]);
 
     const payload: LongFormRequestPayload = buildLongFormRequest(
@@ -132,7 +142,7 @@ export function useLongFormStream(): UseLongFormStreamResult {
             const msg = typeof frame.payload.message === "string"
               ? frame.payload.message.replaceAll("_", " ")
               : "Processing";
-            setStreamStatus(msg);
+            setStreamStatus({ code: "backend", message: msg });
           }
 
           if (frame.event === "outline") {
@@ -149,13 +159,13 @@ export function useLongFormStream(): UseLongFormStreamResult {
                 wordCount:     0,
               })));
             }
-            setStreamStatus("Outline ready");
+            setStreamStatus({ code: "outline_ready" });
           }
 
           if (frame.event === "chapter_start") {
             const num = typeof frame.payload.number === "number" ? frame.payload.number : -1;
             currentChapterNum = num;
-            setStreamStatus(`Writing chapter ${num}`);
+            setStreamStatus({ code: "writing_chapter", chapter: num });
             setChapters(prev => prev.map(c =>
               c.outline.number === num ? { ...c, status: "generating", text: "" } : c
             ));
@@ -176,7 +186,7 @@ export function useLongFormStream(): UseLongFormStreamResult {
           if (frame.event === "chapter_revision") {
             const num     = typeof frame.payload.chapter === "number" ? frame.payload.chapter : currentChapterNum;
             const attempt = typeof frame.payload.attempt === "number" ? frame.payload.attempt : 1;
-            setStreamStatus(`Revising chapter ${num} (attempt ${attempt})`);
+            setStreamStatus({ code: "revising_chapter", chapter: num, attempt });
             setChapters(prev => prev.map(c =>
               c.outline.number === num
                 ? { ...c, status: "revising", revisionCount: attempt, text: "" }
@@ -198,7 +208,7 @@ export function useLongFormStream(): UseLongFormStreamResult {
           }
 
           if (frame.event === "complete") {
-            setStreamStatus("Complete");
+            setStreamStatus({ code: "complete" });
           }
 
           if (frame.event === "log") {
@@ -227,12 +237,12 @@ export function useLongFormStream(): UseLongFormStreamResult {
         }
       }
 
-      setStreamStatus("Complete");
+      setStreamStatus({ code: "complete" });
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : "Streaming failed.";
       setStreamError(message);
-      setStreamStatus("Error");
+      setStreamStatus({ code: "error" });
     } finally {
       setIsStreaming(false);
     }

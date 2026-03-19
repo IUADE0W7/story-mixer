@@ -32,7 +32,7 @@ import {
   PROVIDER_OPTIONS,
   type ProviderConfig,
 } from "@/lib/story-streaming";
-import { useLongFormStream, type ChapterState } from "@/components/use-long-form-stream";
+import { useLongFormStream, type ChapterState, type StreamStatus } from "@/components/use-long-form-stream";
 import { AgentInteractionLog } from "@/components/agent-interaction-log";
 import { downloadStoryAsPdf } from "@/lib/story-pdf";
 
@@ -329,6 +329,19 @@ function MixerChannel({
       </div>
     </div>
   );
+}
+
+function formatStreamStatus(status: StreamStatus, t: (key: import("@/locales/index").TranslationKey) => string): string {
+  switch (status.code) {
+    case "ready":            return t("vibe.status.streamReady");
+    case "connecting":       return t("vibe.status.streamConnecting");
+    case "outline_ready":    return t("vibe.status.streamOutlineReady");
+    case "writing_chapter":  return `${t("vibe.status.streamWritingChapter")} ${status.chapter}`;
+    case "revising_chapter": return `${t("vibe.status.streamRevisingChapter")} ${status.chapter} (${t("vibe.status.streamAttempt")} ${status.attempt})`;
+    case "complete":         return t("vibe.status.streamComplete");
+    case "error":            return t("vibe.status.streamError");
+    case "backend":          return status.message;
+  }
 }
 
 export function VibeController({
@@ -716,7 +729,7 @@ export function VibeController({
                   transition: "all 0.3s ease",
                 }}
               >
-                {lfStatus}
+                {formatStreamStatus(lfStatus, t)}
               </span>
             </div>
 
@@ -949,7 +962,7 @@ export function VibeController({
             className="text-xs"
             style={{ fontFamily: "var(--font-mono)", color: "var(--teal)" }}
           >
-            {lfStatus}...
+            {formatStreamStatus(lfStatus, t)}...
           </span>
         )}
         <button
