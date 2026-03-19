@@ -1,67 +1,114 @@
-"""Integration tests for auth endpoints and rate limiting (require real DB)."""
+"""Integration tests for POST /api/v1/auth/google endpoint and rate limiting (require real DB)."""
 
 from __future__ import annotations
 
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.persistence.models import GenerationRequest, User
-from app.services.auth_service import hash_password, issue_token
+from app.services.auth_service import issue_token
 
 pytestmark = pytest.mark.integration
 
+VALID_PAYLOAD = {
+    "sub": "google-uid-001",
+    "email": "alice@gmail.com",
+    "email_verified": True,
+    "name": "Alice Test",
+    "picture": "https://example.com/alice.jpg",
+}
 
-# ── Register ──────────────────────────────────────────────────────────────────
+
+# ── POST /api/v1/auth/google ──────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_register_returns_201_with_token(client: AsyncClient) -> None:
-    resp = await client.post(
-        "/api/v1/auth/register",
-        json={"email": "alice@test.com", "password": "password123"},
-    )
-    assert resp.status_code == 201
+async def test_google_login_returns_200_with_token(client: AsyncClient) -> None:
+    with patch(
+        "app.api.v1.auth.verify_google_credential",
+        new=AsyncMock(return_value=VALID_PAYLOAD),
+    ):
+        resp = await client.post("/api/v1/auth/google", json={"credential": "fake"})
+    assert resp.status_code == 200
     data = resp.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
 
 
 @pytest.mark.asyncio
-async def test_register_409_on_duplicate_email(client: AsyncClient) -> None:
-    payload = {"email": "bob@test.com", "password": "password123"}
-    await client.post("/api/v1/auth/register", json=payload)
-    resp = await client.post("/api/v1/auth/register", json=payload)
-    assert resp.status_code == 409
+async def test_google_login_creates_new_user(client: AsyncClient, db_session: AsyncSession) -> None:
+    from sqlalchemy import select
 
-
-# ── Login ─────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_login_returns_200_with_token(client: AsyncClient) -> None:
-    email, pwd = "carol@test.com", "password123"
-    await client.post("/api/v1/auth/register", json={"email": email, "password": pwd})
-    resp = await client.post("/api/v1/auth/login", json={"email": email, "password": pwd})
+    payload = {**VALID_PAYLOAD, "sub": "google-uid-new", "email": "newuser@gmail.com"}
+    with patch(
+        "app.api.v1.auth.verify_google_credential",
+        new=AsyncMock(return_value=payload),
+    ):
+        resp = await client.post("/api/v1/auth/google", json={"credential": "fake"})
     assert resp.status_code == 200
-    assert "access_token" in resp.json()
+
+    result = await db_session.execute(select(User).where(User.google_id == "google-uid-new"))
+    user = result.scalar_one_or_none()
+    assert user is not None
+    assert user.email == "newuser@gmail.com"
+    assert user.display_name == "Alice Test"
 
 
 @pytest.mark.asyncio
-async def test_login_401_wrong_password(client: AsyncClient) -> None:
-    await client.post(
-        "/api/v1/auth/register",
-        json={"email": "dave@test.com", "password": "correctpass"},
-    )
-    resp = await client.post(
-        "/api/v1/auth/login",
-        json={"email": "dave@test.com", "password": "wrongpass"},
-    )
+async def test_google_login_upserts_existing_user(
+    client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Second login with the same google_id updates profile but keeps the same user id."""
+    from sqlalchemy import select
+
+    sub = "google-uid-upsert"
+    payload1 = {**VALID_PAYLOAD, "sub": sub, "email": "upsert@gmail.com", "name": "Old Name"}
+    payload2 = {**VALID_PAYLOAD, "sub": sub, "email": "upsert@gmail.com", "name": "New Name"}
+
+    with patch("app.api.v1.auth.verify_google_credential", new=AsyncMock(return_value=payload1)):
+        r1 = await client.post("/api/v1/auth/google", json={"credential": "fake"})
+    with patch("app.api.v1.auth.verify_google_credential", new=AsyncMock(return_value=payload2)):
+        r2 = await client.post("/api/v1/auth/google", json={"credential": "fake"})
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+
+    result = await db_session.execute(select(User).where(User.google_id == sub))
+    users = result.scalars().all()
+    assert len(users) == 1  # no duplicate row
+    assert users[0].display_name == "New Name"
+
+
+@pytest.mark.asyncio
+async def test_google_login_returns_401_on_invalid_credential(client: AsyncClient) -> None:
+    with patch(
+        "app.api.v1.auth.verify_google_credential",
+        new=AsyncMock(side_effect=ValueError("Token is expired")),
+    ):
+        resp = await client.post("/api/v1/auth/google", json={"credential": "bad"})
     assert resp.status_code == 401
+    assert "Invalid Google credential" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_google_login_returns_409_on_email_collision(client: AsyncClient) -> None:
+    """Same email, different google_id → 409."""
+    email = "collision@gmail.com"
+    payload1 = {**VALID_PAYLOAD, "sub": "google-uid-a", "email": email}
+    payload2 = {**VALID_PAYLOAD, "sub": "google-uid-b", "email": email}
+
+    with patch("app.api.v1.auth.verify_google_credential", new=AsyncMock(return_value=payload1)):
+        await client.post("/api/v1/auth/google", json={"credential": "fake"})
+    with patch("app.api.v1.auth.verify_google_credential", new=AsyncMock(return_value=payload2)):
+        resp = await client.post("/api/v1/auth/google", json={"credential": "fake"})
+
+    assert resp.status_code == 409
 
 
 # ── Auth guard ────────────────────────────────────────────────────────────────
@@ -84,7 +131,7 @@ async def _create_user_with_token(
     user = User(
         id=str(uuid.uuid4()),
         email=email,
-        password_hash=hash_password("pass12345"),
+        google_id=str(uuid.uuid4()),
     )
     db_session.add(user)
     await db_session.commit()
@@ -118,7 +165,6 @@ async def test_rate_limit_blocks_after_n_requests(
     )
     assert resp.status_code == 429
     body = resp.json()
-    # Body shape from the custom RateLimitExceeded handler — flat, not nested
     assert body["detail"] == "Rate limit exceeded"
     assert "retry_after" in body
     assert "Retry-After" in resp.headers
@@ -169,7 +215,6 @@ async def test_rate_limit_concurrent_requests_cannot_bypass(
 
     user, token = await _create_user_with_token(db_session, "concurrent@test.com")
 
-    # Pre-fill to one below the limit
     now = datetime.now(timezone.utc)
     for _ in range(settings.rate_limit_per_hour - 1):
         db_session.add(
@@ -181,7 +226,6 @@ async def test_rate_limit_concurrent_requests_cannot_bypass(
         )
     await db_session.commit()
 
-    # Fire two requests simultaneously — only one should succeed
     results = await asyncio.gather(
         client.post(
             "/api/v1/stories/generate-long-form",
@@ -197,14 +241,10 @@ async def test_rate_limit_concurrent_requests_cannot_bypass(
     )
 
     statuses = [r.status_code for r in results if hasattr(r, "status_code")]
-    # One request should have passed auth+rate-limit (200 or 4xx from missing body),
-    # the other should have been blocked (429). Not both should pass rate limit.
-    # The one that passes rate limit will fail at body validation (422) — that's fine.
     assert 429 in statuses, (
         f"Expected at least one 429 in concurrent results, got {statuses}"
     )
 
-    # Confirm only one row was inserted (count = limit, not limit+1)
     async with session_factory() as check_session:
         window_start = datetime.now(timezone.utc) - timedelta(hours=1)
         count = (
