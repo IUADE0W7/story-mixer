@@ -168,6 +168,9 @@ const uk: typeof en = {
     progress: {
       sectionLabel: "Прогрес довгої форми",
       tableOfContents: "Зміст",
+      chaptersUnit: "розд.",
+      wordsEachUnit: "слів кожен",
+      error: "Помилка",
     },
     warnings: {
       stern_but_respectful:

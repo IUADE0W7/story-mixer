@@ -704,7 +704,7 @@ export function VibeController({
           >
             <div className="flex items-center justify-between mb-3 -mt-1">
               <span className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-                {chapterCount} chapters · {chapterWords} words each
+                {chapterCount} {t("vibe.progress.chaptersUnit")} · {chapterWords} {t("vibe.progress.wordsEachUnit")}
               </span>
               <span
                 className="text-xs px-2 py-0.5 rounded-full"
@@ -800,7 +800,7 @@ export function VibeController({
 
               {lfError && (
                 <Alert className="border-0" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)" }}>
-                  <AlertTitle style={{ color: "var(--rose)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>Error</AlertTitle>
+                  <AlertTitle style={{ color: "var(--rose)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>{t("vibe.progress.error")}</AlertTitle>
                   <AlertDescription style={{ color: "var(--cream-muted)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>{lfError}</AlertDescription>
                 </Alert>
               )}

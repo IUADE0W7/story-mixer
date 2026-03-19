@@ -166,6 +166,9 @@ const en = {
     progress: {
       sectionLabel: "Long-form Progress",
       tableOfContents: "Table of Contents",
+      chaptersUnit: "chapters",
+      wordsEachUnit: "words each",
+      error: "Error",
     },
     warnings: {
       stern_but_respectful:
