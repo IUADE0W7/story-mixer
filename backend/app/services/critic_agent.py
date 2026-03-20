@@ -6,6 +6,7 @@ import logging
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.config import settings
 from app.domain.long_form_contracts import ChapterCriticResult, ChapterOutline, LongFormRequest
 from app.domain.vibe_models import CalibrationProfile
 from app.services.model_factory import build_chat_model
@@ -66,7 +67,7 @@ class StructuredChapterCritic:
         chapter_outline: ChapterOutline,
         previous_summaries: list[str],
     ) -> ChapterCriticResult:
-        chat_model = build_chat_model(request.provider, for_judge=True)
+        chat_model = build_chat_model(for_judge=True)
         structured = chat_model.with_structured_output(_CriticOutput)
 
         directive_lines = "\n".join(
@@ -93,12 +94,21 @@ class StructuredChapterCritic:
             "Set passed=false if vibe is misaligned or narrative continuity breaks."
         )
 
-        logger.debug(
-            "Critic prompt chapter=%d provider=%s",
+        logger.info(
+            "Critic agent: chapter=%d provider=%s model=%s",
             chapter_outline.number,
-            request.provider.provider,
+            settings.llm_provider,
+            settings.llm_judge_model,
         )
+        logger.debug("Critic prompt: chapter=%d %d chars", chapter_outline.number, len(prompt))
         result: _CriticOutput = await structured.ainvoke(prompt)  # type: ignore[assignment]
+        logger.info(
+            "Critic verdict: chapter=%d %s confidence=%.0f%% summary=%r",
+            chapter_outline.number,
+            "accepted" if result.passed else "rejected",
+            result.confidence * 100,
+            result.summary,
+        )
 
         return ChapterCriticResult(
             passed=result.passed,
