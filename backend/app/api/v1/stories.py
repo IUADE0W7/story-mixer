@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
 from app.domain.long_form_contracts import LongFormRequest
-from app.domain.story_contracts import ProviderSelection
 from app.services.contracts import PromptEnvelope
 from app.services.critic_agent import LocalChapterCritic, StructuredChapterCritic
 from app.services.long_form_orchestrator import LongFormOrchestrator
@@ -31,7 +30,6 @@ class ProviderSmokeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: ProviderSelection
     prompt: str = Field(min_length=1, max_length=1_200)
 
 
@@ -68,6 +66,11 @@ async def generate_long_form_story(
 ) -> StreamingResponse:
     """Stream a multi-chapter story through the outline → write → critic pipeline."""
 
+    logger.info(
+        "Story generation requested: chapters=%d critic=%s",
+        request.chapter_count,
+        request.enable_critic,
+    )
     orchestrator = build_long_form_orchestrator()
     return StreamingResponse(
         _stream_long_form_events(orchestrator.stream(request=request)),
@@ -78,11 +81,13 @@ async def generate_long_form_story(
 async def _stream_long_form_events(events: AsyncIterator[dict]) -> AsyncIterator[str]:
     """Serialize long-form pipeline events into RFC-compliant SSE frames."""
 
+    logger.info("SSE stream started")
     try:
         async for event in events:
             name = event.get("event", "message")
             data = event.get("payload", {})
             yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
+        logger.info("SSE stream ended normally")
     except Exception as error:
         logger.exception("Unhandled exception while streaming long-form generation")
         payload = {
@@ -92,6 +97,10 @@ async def _stream_long_form_events(events: AsyncIterator[dict]) -> AsyncIterator
         }
         with contextlib.suppress(Exception):
             yield f"event: error\ndata: {json.dumps(payload)}\n\n"
+        logger.info("SSE stream ended with error")
+    except BaseException:
+        logger.info("SSE stream ended: client disconnected")
+        raise
 
 
 @router.get("/health/ollama")
@@ -139,7 +148,6 @@ async def real_provider_smoke(request: ProviderSmokeRequest) -> dict[str, object
                 user_prompt=request.prompt,
                 metadata={"smoke": True},
             ),
-            provider=request.provider,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -149,8 +157,8 @@ async def real_provider_smoke(request: ProviderSmokeRequest) -> dict[str, object
 
     return {
         "ok": bool(completion.strip()),
-        "provider": request.provider.provider,
-        "model": request.provider.model,
+        "provider": settings.llm_provider,
+        "model": settings.llm_model,
         "chars": len(completion),
         "preview": completion[:220],
     }
