@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { VibeController } from "@/components/vibe-controller";
 import { useLanguage } from "@/lib/language-context";
+import { decodeEmail } from "@/lib/auth";
 import type { VibeValues } from "@/lib/vibe-bands";
 
 const DEFAULT_VIBE: VibeValues = { aggression: 5, readerRespect: 6, morality: 5, sourceFidelity: 7 };
@@ -57,6 +58,20 @@ function MixerLogo({ size = 44 }: { size?: number }) {
 export default function HomePage() {
   const { t } = useLanguage();
   const [values, setValues] = useState<VibeValues>(DEFAULT_VIBE);
+  const [token, setToken] = useState<string | null>(() =>
+    typeof window !== "undefined" ? localStorage.getItem("lf_token") : null
+  );
+
+  const handleTokenChange = useCallback((t: string | null) => {
+    if (t) {
+      localStorage.setItem("lf_token", t);
+    } else {
+      localStorage.removeItem("lf_token");
+    }
+    setToken(t);
+  }, []);
+
+  const email = token ? decodeEmail(token) : null;
 
   return (
     <div className="min-h-screen" style={{ background: "var(--ink)" }}>
@@ -89,6 +104,16 @@ export default function HomePage() {
 
         {/* Status pip */}
         <div className="flex items-center gap-2">
+          {email && (
+            <>
+              <span className="lf-section-label" style={{ color: "var(--cream-muted)" }}>
+                {email}
+              </span>
+              <span className="lf-section-label" style={{ color: "var(--cream-faint)" }} aria-hidden="true">
+                •
+              </span>
+            </>
+          )}
           <div className="relative flex h-2 w-2">
             <div
               className="absolute inline-flex h-full w-full rounded-full opacity-75"
@@ -123,6 +148,8 @@ export default function HomePage() {
         <VibeController
           values={values}
           onChange={setValues}
+          token={token}
+          onTokenChange={handleTokenChange}
         />
       </main>
 
