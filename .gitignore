@@ -33,7 +33,8 @@ backend/.env.local
 *.key
 
 # Claude Code — local-only overrides
-.claude/settings.local.json
+.claude/
+.serena/
 
 # IDE & Editor
 .vscode/
