@@ -101,3 +101,4 @@ dist/
 .env.development.local
 .env.test.local
 run_debug.sh.local
+.mcp.json
