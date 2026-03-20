@@ -62,13 +62,13 @@ export default function HomePage() {
     typeof window !== "undefined" ? localStorage.getItem("lf_token") : null
   );
 
-  const handleTokenChange = useCallback((t: string | null) => {
-    if (t) {
-      localStorage.setItem("lf_token", t);
+  const handleTokenChange = useCallback((newToken: string | null) => {
+    if (newToken) {
+      localStorage.setItem("lf_token", newToken);
     } else {
       localStorage.removeItem("lf_token");
     }
-    setToken(t);
+    setToken(newToken);
   }, []);
 
   const email = token ? decodeEmail(token) : null;
