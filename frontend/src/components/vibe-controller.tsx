@@ -392,7 +392,6 @@ export function VibeController({
 
   useEffect(() => {
     if (lfStatus.code === "unauthenticated") {
-      localStorage.removeItem("lf_token");
       onTokenChange(null);
     }
   }, [lfStatus.code, onTokenChange]);
