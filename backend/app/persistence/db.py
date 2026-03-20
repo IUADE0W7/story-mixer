@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def build_engine() -> AsyncEngine:
@@ -29,5 +32,9 @@ session_factory = async_sessionmaker(
 async def get_session() -> AsyncIterator[AsyncSession]:
     """Provide one transactional session per request for repository consistency."""
 
-    async with session_factory() as session:
-        yield session
+    logger.debug("DB session opened")
+    try:
+        async with session_factory() as session:
+            yield session
+    finally:
+        logger.debug("DB session closed")
