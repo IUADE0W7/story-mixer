@@ -1,37 +1,102 @@
 # Python
 .venv/
+venv/
+env/
+ENV/
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.pyw
 *.egg-info/
+*.egg
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 dist/
 build/
+*.whl
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
 
 # Environment / secrets
 backend/.env
+backend/.env.local
 .env
-*.env.local
+.env.local
+.env.*.local
+*.env
+*.pem
+*.key
 
-# Claude Code — local-only overrides (never commit)
+# Claude Code — local-only overrides
 .claude/settings.local.json
 
-# Node
+# IDE & Editor
+.vscode/
+.vscode-server/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.AppleDouble
+.LSOverride
+*.sublime-project
+*.sublime-workspace
+
+# Node/Frontend
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.turbo/
+frontend/.cache/
 
-# Playwright
+# Testing
 frontend/test-results/
 frontend/playwright-report/
+frontend/blob-report/
+frontend/playwright/.cache/
+.nyc_output/
+coverage/
 
-# DB
+# Database & ORM
 *.sqlite
+*.sqlite3
 *.db
+alembic/versions/__pycache__/
+postgres_data/
+pgdata/
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+.AppleDouble
 
-# Git worktrees
+# Git
 .worktrees/
+*.patch
+
+# Build artifacts
+.next/
+out/
+dist/
+
+# Local development
+.env.development.local
+.env.test.local
+run_debug.sh.local
