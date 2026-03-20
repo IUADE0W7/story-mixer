@@ -233,7 +233,6 @@ class LongFormOrchestrator:
 
                 # Critic evaluation (skipped when enable_critic is False)
                 if not request.enable_critic:
-                    logger.info("Critic disabled — accepting chapter %d as-is", chapter_outline.number)
                     yield _log(request_id, "Orchestrator", "Critic", f"Critic disabled — accepting chapter {chapter_outline.number} as-is")
                     break
 

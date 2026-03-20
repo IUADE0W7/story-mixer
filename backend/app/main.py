@@ -141,13 +141,10 @@ def _configure_logging() -> None:
     for app_name in ("app", "app.requests", "app.main", "app.lifespan"):
         lg = logging.getLogger(app_name)
         lg.setLevel(root_level)
-        if not lg.handlers:
-            lg.addHandler(_make_handler())
-        else:
-            for h in lg.handlers:
-                if not any(isinstance(f, RequestIdFilter) for f in h.filters):
-                    h.addFilter(RequestIdFilter())
-                    h.setFormatter(logging.Formatter(fmt))
+        # Remove any dedicated handlers — let records propagate to the root handler
+        # which already has RequestIdFilter attached
+        for h in list(lg.handlers):
+            lg.removeHandler(h)
         lg.propagate = True
 
 
