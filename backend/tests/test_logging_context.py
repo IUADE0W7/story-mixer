@@ -1,6 +1,9 @@
 # backend/tests/test_logging_context.py
 """Unit tests for request-ID context propagation."""
+import asyncio
 import logging
+
+import pytest
 
 from app.logging_context import (
     RequestIdFilter,
@@ -56,3 +59,23 @@ def test_filter_always_returns_true():
     record = logging.LogRecord("test", logging.INFO, "", 0, "msg", (), None)
     f = RequestIdFilter()
     assert f.filter(record) is True
+
+
+@pytest.mark.asyncio
+async def test_contextvar_isolation_across_tasks():
+    """Each asyncio Task gets its own copy of the ContextVar."""
+    results: dict[str, str] = {}
+
+    async def set_and_capture(name: str, value: str) -> None:
+        token = set_request_id(value)
+        await asyncio.sleep(0)
+        results[name] = get_request_id()
+        reset_request_id(token)
+
+    await asyncio.gather(
+        set_and_capture("task_a", "aaa"),
+        set_and_capture("task_b", "bbb"),
+    )
+
+    assert results["task_a"] == "aaa"
+    assert results["task_b"] == "bbb"
