@@ -62,10 +62,6 @@ class AppSettings(BaseSettings):
     app_version: str = "0.1.0"
     auto_create_schema: bool = False
     use_stub_llm: bool = False
-    enable_real_provider_smoke: bool = False
-    real_provider_smoke_prompt: str = (
-        "Write a compact two-sentence noir opening with calibrated narrative tone."
-    )
     database_url: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5432/loreforge",
     )

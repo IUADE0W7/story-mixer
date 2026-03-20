@@ -62,19 +62,6 @@ chmod +x check_ollama.sh
 ./check_ollama.sh
 ```
 
-- Run the guarded real-provider smoke test (fast way to verify an end-to-end provider call):
-
-```bash
-# from repository root
-export PYTHONPATH=backend
-export OLLAMA_BASE_URL=http://172.19.160.1:11434
-export RUN_REAL_PROVIDER_SMOKE=true
-export REAL_SMOKE_PROVIDER=ollama
-export REAL_SMOKE_MODEL=gpt-oss:20b
-export REAL_SMOKE_JUDGE_MODEL=gpt-oss:20b
-.venv/bin/pytest -q backend/tests/test_real_provider_smoke.py::test_real_provider_smoke_endpoint
-```
-
 - Test the long-form generation endpoint against the running backend:
 
 ```bash
@@ -93,4 +80,3 @@ Files referenced in this README
 
 - `check_ollama.sh` — repo helper that probes Ollama CLI and API
 - `backend/.env` — environment examples used by the backend
-- `backend/tests/test_real_provider_smoke.py` — guarded integration smoke test

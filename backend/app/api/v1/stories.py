@@ -9,11 +9,9 @@ from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
 from app.domain.long_form_contracts import LongFormRequest
-from app.services.contracts import PromptEnvelope
 from app.services.long_form_orchestrator import LongFormOrchestrator
 from app.services.model_factory import verify_ollama_connectivity
 from app.services.outline_agent import LocalOutlineAgent, StructuredOutlineAgent
@@ -22,14 +20,6 @@ from app.api.deps import check_rate_limit
 
 router = APIRouter(prefix="/stories", tags=["stories"])
 logger = logging.getLogger(__name__)
-
-
-class ProviderSmokeRequest(BaseModel):
-    """Minimal payload used to verify live provider connectivity on demand."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    prompt: str = Field(min_length=1, max_length=1_200)
 
 
 def build_long_form_orchestrator() -> LongFormOrchestrator:
@@ -119,35 +109,3 @@ async def ollama_health() -> dict[str, object]:
     }
 
 
-@router.post("/smoke/provider")
-async def real_provider_smoke(request: ProviderSmokeRequest) -> dict[str, object]:
-    """Run a guarded live-provider smoke call outside normal generation orchestration."""
-
-    if not settings.enable_real_provider_smoke:
-        raise HTTPException(status_code=404, detail="Smoke endpoint is disabled.")
-
-    gateway = HybridLangChainGateway()
-    try:
-        completion = await gateway.generate_text(
-            prompt=PromptEnvelope(
-                system_prompt=(
-                    "You are a calibrated narrative model. Keep output concise, coherent, "
-                    "and aligned to the user instruction."
-                ),
-                user_prompt=request.prompt,
-                metadata={"smoke": True},
-            ),
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except Exception as error:
-        logger.exception("Provider smoke request failed")
-        raise HTTPException(status_code=502, detail="Provider smoke request failed.") from error
-
-    return {
-        "ok": bool(completion.strip()),
-        "provider": settings.llm_provider,
-        "model": settings.llm_model,
-        "chars": len(completion),
-        "preview": completion[:220],
-    }
