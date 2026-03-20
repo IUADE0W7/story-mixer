@@ -52,15 +52,10 @@ export interface LongFormRequestPayload {
     morality: number;
     source_fidelity: number;
   };
-  provider: {
-    provider: string;
-    model: string;
-    judge_model: string;
-    temperature: number;
-  };
   chapter_count: number;
   chapter_word_target: number;
   revision_limit: number;
+  enable_critic: boolean;
   stream: true;
 }
 
@@ -75,33 +70,6 @@ export interface StreamEventFrame {
   event: string;
   payload: Record<string, unknown>;
 }
-
-export interface ProviderConfig {
-  provider: string;
-  model: string;
-  judgeModel: string;
-  temperature: number;
-}
-
-export interface ProviderOption {
-  id: string;
-  label: string;
-  defaultModel: string;
-}
-
-export const PROVIDER_OPTIONS: ProviderOption[] = [
-  { id: "ollama",    label: "Ollama (local)",   defaultModel: "gpt-oss:20b" },
-  { id: "openai",    label: "OpenAI",            defaultModel: "gpt-4o-mini" },
-  { id: "anthropic", label: "Anthropic",         defaultModel: "claude-3-haiku-20240307" },
-  { id: "gemini",    label: "Google Gemini",     defaultModel: "gemini-1.5-flash" },
-];
-
-export const DEFAULT_PROVIDER_CONFIG: ProviderConfig = {
-  provider: "ollama",
-  model: "gpt-oss:20b",
-  judgeModel: "gpt-oss:20b",
-  temperature: 0.8,
-};
 
 const normalizeOptionalText = (value?: string): string | undefined => {
   const normalized = value?.trim();
@@ -136,9 +104,9 @@ const buildDefaultPrompt = (values: VibeValues, language: string): string => {
 
 export const buildLongFormRequest = (
   draft: StoryDraftInput,
-  providerConfig: ProviderConfig,
   chapterCount: number,
   chapterWordTarget: number,
+  enableCritic: boolean = true,
 ): LongFormRequestPayload => {
   const publicTitle = normalizeOptionalText(draft.publicTitle);
   const language    = draft.language ?? "en";
@@ -159,15 +127,10 @@ export const buildLongFormRequest = (
       morality:        draft.values.morality,
       source_fidelity: draft.values.sourceFidelity,
     },
-    provider: {
-      provider:    providerConfig.provider,
-      model:       providerConfig.model,
-      judge_model: providerConfig.judgeModel,
-      temperature: providerConfig.temperature,
-    },
     chapter_count:      chapterCount,
     chapter_word_target: chapterWordTarget,
     revision_limit: 2,
+    enable_critic: enableCritic,
     stream: true,
   };
 };

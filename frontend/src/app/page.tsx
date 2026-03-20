@@ -1,10 +1,18 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { VibeController } from "@/components/vibe-controller";
 import { useLanguage } from "@/lib/language-context";
 import { decodeEmail } from "@/lib/auth";
 import type { VibeValues } from "@/lib/vibe-bands";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { isValidLang } from "@/locales/index";
 
 const DEFAULT_VIBE: VibeValues = { aggression: 5, readerRespect: 6, morality: 5, sourceFidelity: 7 };
 
@@ -56,11 +64,13 @@ function MixerLogo({ size = 44 }: { size?: number }) {
 }
 
 export default function HomePage() {
-  const { t } = useLanguage();
+  const { t, lang, setLang, flag } = useLanguage();
   const [values, setValues] = useState<VibeValues>(DEFAULT_VIBE);
-  const [token, setToken] = useState<string | null>(() =>
-    typeof window !== "undefined" ? localStorage.getItem("lf_token") : null
-  );
+  const [token, setToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    setToken(localStorage.getItem("lf_token"));
+  }, []);
 
   const handleTokenChange = useCallback((newToken: string | null) => {
     if (newToken) {
@@ -102,34 +112,73 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Status pip */}
-        <div className="flex items-center gap-2">
-          {email && (
-            <>
-              <span className="lf-section-label" style={{ color: "var(--cream-muted)" }}>
-                {email}
-              </span>
-              <span className="lf-section-label" style={{ color: "var(--cream-faint)" }} aria-hidden="true">
-                •
-              </span>
-            </>
-          )}
-          <div className="relative flex h-2 w-2">
-            <div
-              className="absolute inline-flex h-full w-full rounded-full opacity-75"
+        <div className="flex items-center gap-4">
+          {/* Language selector */}
+          <Select
+            value={lang}
+            onValueChange={(v) => { if (isValidLang(v)) setLang(v); }}
+          >
+            <SelectTrigger
+              className="h-7 border-0 focus:ring-1 focus:ring-[#14B8A6] gap-1.5"
               style={{
-                background: "var(--teal)",
-                animation: "glowPulse 2.4s ease-in-out infinite",
+                background: "var(--surface-high)",
+                border: "1px solid var(--border-bright)",
+                color: "var(--cream-muted)",
+                fontFamily: "var(--font-mono)",
+                fontSize: "11px",
+                letterSpacing: "0.08em",
+                width: "auto",
+                paddingLeft: "8px",
+                paddingRight: "8px",
               }}
-            />
-            <div
-              className="relative inline-flex h-2 w-2 rounded-full"
-              style={{ background: "var(--teal)" }}
-            />
+              aria-label="Select story language"
+            >
+              <span aria-hidden className="text-sm leading-none">{flag}</span>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent
+              style={{
+                background: "var(--surface-raised)",
+                border: "1px solid var(--border-bright)",
+                color: "var(--cream)",
+              }}
+            >
+              <SelectItem value="en" className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">{t("vibe.language.english")}</SelectItem>
+              <SelectItem value="uk" className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">{t("vibe.language.ukrainian")}</SelectItem>
+              <SelectItem value="ru" className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">{t("vibe.language.russian")}</SelectItem>
+              <SelectItem value="kk" className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">{t("vibe.language.kazakh")}</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Status pip */}
+          <div className="flex items-center gap-2">
+            {email && (
+              <>
+                <span className="lf-section-label" style={{ color: "var(--cream-muted)" }}>
+                  {email}
+                </span>
+                <span className="lf-section-label" style={{ color: "var(--cream-faint)" }} aria-hidden="true">
+                  •
+                </span>
+              </>
+            )}
+            <div className="relative flex h-2 w-2">
+              <div
+                className="absolute inline-flex h-full w-full rounded-full opacity-75"
+                style={{
+                  background: "var(--teal)",
+                  animation: "glowPulse 2.4s ease-in-out infinite",
+                }}
+              />
+              <div
+                className="relative inline-flex h-2 w-2 rounded-full"
+                style={{ background: "var(--teal)" }}
+              />
+            </div>
+            <span className="lf-section-label" style={{ color: "var(--cream-muted)" }}>
+              {t("ui.header.studioReady")}
+            </span>
           </div>
-          <span className="lf-section-label" style={{ color: "var(--cream-muted)" }}>
-            {t("ui.header.studioReady")}
-          </span>
         </div>
       </header>
 

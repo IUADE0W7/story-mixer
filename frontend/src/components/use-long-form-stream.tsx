@@ -7,7 +7,6 @@ import {
   parseSseChunk,
   type ChapterOutlineEntry,
   type LongFormRequestPayload,
-  type ProviderConfig,
   type StoryDraftInput,
 } from "@/lib/story-streaming";
 
@@ -44,9 +43,9 @@ export interface ChapterState {
 
 interface GenerateLongFormArgs {
   draft: StoryDraftInput;
-  providerConfig: ProviderConfig;
   chapterCount: number;
   chapterWordTarget: number;
+  enableCritic?: boolean;
   token?: string | null;
 }
 
@@ -83,9 +82,9 @@ export function useLongFormStream(): UseLongFormStreamResult {
 
   const generateLongForm = useCallback(async ({
     draft,
-    providerConfig,
     chapterCount,
     chapterWordTarget,
+    enableCritic = true,
     token,
   }: GenerateLongFormArgs): Promise<void> => {
     abortRef.current?.abort();
@@ -101,9 +100,9 @@ export function useLongFormStream(): UseLongFormStreamResult {
 
     const payload: LongFormRequestPayload = buildLongFormRequest(
       draft,
-      providerConfig,
       chapterCount,
       chapterWordTarget,
+      enableCritic,
     );
 
     try {

@@ -1,7 +1,6 @@
 """Domain models for LoreForge story generation."""
 
 from .story_contracts import (
-    ProviderSelection,
     StoryContext,
 )
 from .vibe_models import (
@@ -18,7 +17,6 @@ __all__ = [
     "CalibrationDirective",
     "CalibrationProfile",
     "MetricBand",
-    "ProviderSelection",
     "SoftConstraintCode",
     "StoryContext",
     "VibeMetrics",

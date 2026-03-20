@@ -41,12 +41,12 @@ class _LLMGateway:
     """Emit a short deterministic token stream for any chapter."""
 
     async def stream_text(
-        self, prompt: PromptEnvelope, provider: object
+        self, prompt: PromptEnvelope
     ) -> AsyncIterator[CompletionChunk]:
         for token in ["She ", "moved ", "quickly."]:
             yield CompletionChunk(text=token)
 
-    async def generate_text(self, prompt: PromptEnvelope, provider: object) -> str:
+    async def generate_text(self, prompt: PromptEnvelope) -> str:
         return "She moved quickly."
 
 
@@ -102,7 +102,7 @@ class _RejectFirstCritic:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _make_request(chapter_count: int = 2) -> LongFormRequest:
+def _make_request(chapter_count: int = 2, enable_critic: bool = True) -> LongFormRequest:
     return LongFormRequest.model_validate(
         {
             "context": {
@@ -117,15 +117,10 @@ def _make_request(chapter_count: int = 2) -> LongFormRequest:
                 "morality": 4,
                 "source_fidelity": 6,
             },
-            "provider": {
-                "provider": "openai",
-                "model": "gpt-4o-mini",
-                "judge_model": "gpt-4o-mini",
-                "temperature": 0.8,
-            },
             "chapter_count": chapter_count,
             "chapter_word_target": 300,
             "revision_limit": 2,
+            "enable_critic": enable_critic,
             "stream": True,
         }
     )
@@ -381,3 +376,58 @@ def test_outline_log_precedes_chapter_logs() -> None:
     ]
     if outline_indices and chapter_write_indices:
         assert max(outline_indices) < min(chapter_write_indices)
+
+
+# ── Tests: critic disabled ────────────────────────────────────────────────────
+
+
+def test_critic_disabled_emits_no_critic_evaluation_logs() -> None:
+    """When enable_critic=False, no Orchestrator→Critic log events must appear."""
+    events = _collect(_make_orchestrator(), _make_request(enable_critic=False))
+    logs = _logs(events)
+
+    orch_to_critic = [
+        e for e in logs
+        if e["payload"]["from"] == "Orchestrator" and e["payload"]["to"] == "Critic"
+        and "disabled" not in e["payload"]["message"]
+    ]
+    assert len(orch_to_critic) == 0
+
+
+def test_critic_disabled_emits_no_critic_response_logs() -> None:
+    """When enable_critic=False, no Critic→Orchestrator log events must appear."""
+    events = _collect(_make_orchestrator(), _make_request(enable_critic=False))
+    logs = _logs(events)
+
+    critic_to_orch = [
+        e for e in logs
+        if e["payload"]["from"] == "Critic" and e["payload"]["to"] == "Orchestrator"
+    ]
+    assert len(critic_to_orch) == 0
+
+
+def test_critic_disabled_emits_disabled_log_per_chapter() -> None:
+    """When enable_critic=False, a 'disabled' log must appear for each chapter."""
+    request = _make_request(chapter_count=2, enable_critic=False)
+    events = _collect(_make_orchestrator(), request)
+    logs = _logs(events)
+
+    disabled_logs = [
+        e for e in logs
+        if "disabled" in e["payload"]["message"].lower()
+    ]
+    assert len(disabled_logs) >= 2
+
+
+def test_critic_disabled_still_produces_complete_event() -> None:
+    """When enable_critic=False, the pipeline must still complete successfully."""
+    events = _collect(_make_orchestrator(), _make_request(enable_critic=False))
+    event_names = [e["event"] for e in events]
+    assert "complete" in event_names
+
+
+def test_critic_disabled_produces_fewer_logs_than_enabled() -> None:
+    """Disabling the critic must produce fewer log events than with it enabled."""
+    enabled_events  = _collect(_make_orchestrator(_PassingCritic()), _make_request(enable_critic=True))
+    disabled_events = _collect(_make_orchestrator(_PassingCritic()), _make_request(enable_critic=False))
+    assert len(_logs(disabled_events)) < len(_logs(enabled_events))

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,600&family=JetBrains+Mono:wght@300;400;500;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,600&family=JetBrains+Mono:wght@300;400;500;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&family=Noto+Sans:wght@400;500&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -53,9 +53,9 @@
   --violet-glow: rgba(167, 139, 250, 0.14);
 
   /* ══ Fonts ═══════════════════════════════════════════════════════════════════ */
-  --font-display: 'Cormorant Garamond', Georgia, serif;
-  --font-mono:    'JetBrains Mono', 'Courier New', monospace;
-  --font-serif:   'Merriweather', Georgia, serif;
+  --font-display: 'Cormorant Garamond', 'Noto Sans', Georgia, serif;
+  --font-mono:    'JetBrains Mono', 'Noto Sans', 'Courier New', monospace;
+  --font-serif:   'Merriweather', 'Noto Sans', Georgia, serif;
 }
 
 /* ══ Base Reset ══════════════════════════════════════════════════════════════ */

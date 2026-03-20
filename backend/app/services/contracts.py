@@ -7,8 +7,6 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.story_contracts import ProviderSelection
-
 
 class PromptEnvelope(BaseModel):
     """Prompt packet built by the orchestration layer before hitting an LLM provider."""
@@ -35,13 +33,11 @@ class LLMGateway(Protocol):
     def stream_text(
         self,
         prompt: PromptEnvelope,
-        provider: ProviderSelection,
     ) -> AsyncIterator[CompletionChunk]:
         """Stream tokens or partial chunks from the configured provider."""
 
     async def generate_text(
         self,
         prompt: PromptEnvelope,
-        provider: ProviderSelection,
     ) -> str:
         """Return a non-streaming completion when streaming is disabled."""

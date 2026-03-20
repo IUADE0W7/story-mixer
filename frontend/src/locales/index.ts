@@ -1,7 +1,9 @@
 import en from "./en";
 import uk from "./uk";
+import ru from "./ru";
+import kk from "./kk";
 
-export type Lang = "en" | "uk";
+export type Lang = "en" | "uk" | "ru" | "kk";
 export type Translations = typeof en;
 
 /** Derives a union of all dot-path strings from a nested translations object, e.g. "vibe.bands.balanced". */
@@ -13,12 +15,16 @@ type DotPaths<T, Prefix extends string = ""> = {
 
 export type TranslationKey = DotPaths<Translations>;
 
-export const locales: Record<Lang, Translations> = { en, uk };
+export const locales: Record<Lang, Translations> = { en, uk, ru, kk };
 
 export function languageFlag(lang: string): string {
   switch ((lang || "").toLowerCase()) {
     case "uk":
       return "🇺🇦";
+    case "ru":
+      return "🇷🇺";
+    case "kk":
+      return "🇰🇿";
     case "en":
     default:
       return "🇬🇧";
@@ -26,7 +32,7 @@ export function languageFlag(lang: string): string {
 }
 
 export function isValidLang(value: string): value is Lang {
-  return value === "en" || value === "uk";
+  return value === "en" || value === "uk" || value === "ru" || value === "kk";
 }
 
 /** Resolves a dot-path translation key against a translations object. Returns the key string if not found. */

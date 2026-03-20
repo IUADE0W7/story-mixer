@@ -72,8 +72,14 @@ class AppSettings(BaseSettings):
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
-    google_client_id: str = ""
+    xai_api_key: str | None = None
+    google_client_id: str = "279437916052-v4epiabem96dmc9m15ils4t9m2b7988a.apps.googleusercontent.com"
     ollama_base_url: str = Field(default_factory=_default_ollama_base_url)
+    # LLM provider selection — overrideable via environment variables
+    llm_provider: str = "ollama"
+    llm_model: str = "gpt-oss:20b"
+    llm_judge_model: str = "gpt-oss:20b"
+    llm_temperature: float = Field(default=0.8, ge=0.0, le=2.0)
     # Logging level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     log_level: str = "INFO"
     jwt_secret: str

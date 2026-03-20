@@ -9,7 +9,6 @@ import httpx
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.config import settings
-from app.domain.story_contracts import ProviderSelection
 
 
 def verify_ollama_connectivity(base_url: str | None = None, timeout_seconds: float = 2.0) -> None:
@@ -41,11 +40,12 @@ def verify_ollama_connectivity(base_url: str | None = None, timeout_seconds: flo
         ) from exc
 
 
-def build_chat_model(provider: ProviderSelection, *, for_judge: bool = False) -> BaseChatModel:
-    """Create a configured chat model so orchestration code stays provider-agnostic."""
+def build_chat_model(*, for_judge: bool = False) -> BaseChatModel:
+    """Create a configured chat model from app config so orchestration code stays provider-agnostic."""
 
-    model_name = provider.judge_model if for_judge else provider.model
-    provider_name = provider.provider.strip().lower()
+    model_name = settings.llm_judge_model if for_judge else settings.llm_model
+    provider_name = settings.llm_provider.strip().lower()
+    temperature = settings.llm_temperature
 
     if provider_name == "openai":
         if not settings.openai_api_key:
@@ -54,7 +54,7 @@ def build_chat_model(provider: ProviderSelection, *, for_judge: bool = False) ->
 
         return ChatOpenAI(
             model=model_name,
-            temperature=provider.temperature,
+            temperature=temperature,
             api_key=settings.openai_api_key,
         )
 
@@ -65,7 +65,7 @@ def build_chat_model(provider: ProviderSelection, *, for_judge: bool = False) ->
 
         return ChatAnthropic(
             model=model_name,
-            temperature=provider.temperature,
+            temperature=temperature,
             api_key=settings.anthropic_api_key,
         )
 
@@ -76,8 +76,19 @@ def build_chat_model(provider: ProviderSelection, *, for_judge: bool = False) ->
 
         return ChatGoogleGenerativeAI(
             model=model_name,
-            temperature=provider.temperature,
+            temperature=temperature,
             google_api_key=settings.google_api_key,
+        )
+
+    if provider_name == "xai":
+        if not settings.xai_api_key:
+            raise ValueError("XAI_API_KEY is required when provider is xai.")
+        from langchain_xai import ChatXAI
+
+        return ChatXAI(
+            model=model_name,
+            temperature=temperature,
+            xai_api_key=settings.xai_api_key,
         )
 
     if provider_name == "ollama":
@@ -88,10 +99,10 @@ def build_chat_model(provider: ProviderSelection, *, for_judge: bool = False) ->
 
         return ChatOllama(
             model=model_name,
-            temperature=provider.temperature,
+            temperature=temperature,
             base_url=settings.ollama_base_url,
         )
 
     raise ValueError(
-        "Unsupported provider. Expected one of: openai, anthropic, gemini, ollama."
+        "Unsupported provider. Expected one of: openai, anthropic, gemini, ollama, xai."
     )

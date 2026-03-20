@@ -1,0 +1,251 @@
+import type en from "./en";
+
+const kk: typeof en = {
+  vibe: {
+    briefing: {
+      sectionLabel: "Әңгіме нұсқаулары",
+      description: "Араластыру үшін бастапқы деректерді анықтаңыз және бастапқы сахнаны белгілеңіз.",
+      sourceTaleA: "Бастапқы A",
+      sourceTaleB: "Бастапқы B",
+      narrativeTone: "Баяндау үні",
+      narrativeFallback: "Баяндау",
+    },
+    language: {
+      sectionLabel: "Әңгіме тілі",
+      english: "Ағылшын",
+      ukrainian: "Украин",
+      russian: "Орыс",
+      kazakh: "Қазақ",
+      cyrillicDetected: "🇰🇿 Кириллица анықталды — тілді ауыстырасыз ба?",
+    },
+    brief: {
+      sectionLabel: "Қысқаша сипаттама",
+      placeholder: "Бастапқы сахнаны, басты кейіпкерді, оқиға орнын және шиеленіс түрін сипаттаңыз.",
+    },
+    seeds: {
+      loneWanderer: "Жалғыз кезуші",
+      darkProphecy: "Қараңғы пайғамбарлық",
+      hiddenMonster: "Жасырын жауыз",
+      unlikelyAllies: "Күтпеген одақтастар",
+      forbiddenArchive: "Тыйым салынған мұрағат",
+      lastBloodline: "Соңғы тұқым",
+      theBetrayal: "Сатқындық",
+      shatteredCity: "Қираған қала",
+      loneWandererSeed: "Жалғыз кезуші өліп бара жатқан дүниенің шетіне жетеді — есімсіз және ұстар ештеңесіз.",
+      darkProphecySeed: "Пайғамбарлық ешбір батырдың жасауға дайын еместігін талап етеді — және кері санақ басталып кетті.",
+      hiddenMonsterSeed: "Олар қорыққан жауыз ешқашан аң болмаған. Ол шекте жымиған одақтас еді.",
+      unlikelyAlliesSeed: "Қажеттілікпен байланысқан екі ант берген жауы бірін-бірі жоғалтуға болмайтын нәрсемен сенуі тиіс.",
+      forbiddenArchiveSeed: "Мөрленген мұрағат империяны жоя алатын жалғыз шындықты сақтайды — және біреу оны бұрыннан біледі.",
+      lastBloodlineSeed: "Ежелгі тұқымның соңғы мұрагері басқара алмайтын күш пен төлей алмайтын бағаны алып жүреді.",
+      theBetraySeed: "Сенімді тұлға соңғы сәтте оларды сатады. Оның жеткілікті себебі болды. Бұл жағдайды одан да нашарлатады.",
+      shatteredCitySeed: "Бір кездері ұлы қала қирандыда жатыр. Біреу оны қалпына келтіру үшін емес, өшіру үшін қайта салуда.",
+    },
+    fields: {
+      genre: "Жанр",
+      chapters: "Тараулар",
+      wordsPerChapter: "Сөз/тар.",
+      provider: "Провайдер",
+      model: "Модель",
+      judgeModel: "Судья моделі",
+      temperature: "Температура",
+      enableCritic: "Сыншы агентін қосу",
+    },
+    genres: {
+      fantasy: "Фэнтези",
+      scienceFiction: "Ғылыми фантастика",
+      horror: "Қорқынышты",
+      noir: "Нуар",
+      romance: "Романс",
+      thriller: "Триллер",
+      historicalFiction: "Тарихи проза",
+      fairyTale: "Ертегі",
+      mystery: "Детектив",
+      adventure: "Оқиғалы",
+      mythology: "Мифология",
+      speculativeFiction: "Болжамды фантастика",
+    },
+    placeholders: {
+      sourceTaleA: "мыс. Моби Дик",
+      sourceTaleB: "мыс. Blade Runner",
+      selectGenre: "Жанр таңдаңыз…",
+    },
+    validation: {
+      originalStoryA: "Түпнұсқа әңгіме A",
+      originalStoryB: "Түпнұсқа әңгіме B",
+      genre: "Жанр",
+      pleaseFillIn: "Толтырыңыз:",
+    },
+    sliders: {
+      aggression: {
+        label: "Агрессия",
+        description: "Баяндаудың қарқындылығы мен вербалды күші.",
+      },
+      readerRespect: {
+        label: "Оқырманға құрмет",
+        description: "Оқырман зердесіне деген сенім.",
+      },
+      morality: {
+        label: "Мораль",
+        description: "Этикалық шеңбер және пайымдау қарқындылығы.",
+      },
+      sourceFidelity: {
+        label: "Бастапқыға адалдық",
+        description: "Түпнұсқа дерек пен ойдан шығарылған баяндау.",
+      },
+    },
+    tones: {
+      aggressionAdjective: {
+        strongly_minimized: "Тыныш",
+        restrained: "Өлшеулі",
+        balanced: "Шиеленісті",
+        elevated: "Рақымсыз",
+        dominant: "Аяусыз",
+      },
+      moralityModifier: {
+        strongly_minimized: "Нигилистік",
+        restrained: "Сұр",
+        balanced: "",
+        elevated: "Шынайы",
+        dominant: "Әділетті",
+      },
+      genreFlavor: {
+        noir: "Қатал",
+        horror: "Үрейлі",
+        thriller: "Шиеленісті",
+        fantasy: "Мифтік",
+        scienceFiction: "Церебралды",
+        romance: "Жақын",
+        historicalFiction: "Тарихи",
+        fairyTale: "Ертегілік",
+        mystery: "Жұмбақ",
+        adventure: "Серпінді",
+        mythology: "Эпикалық",
+        speculativeFiction: "Болжамды",
+      },
+      channelLabel: {
+        aggression: {
+          strongly_minimized: "Жұмсақ",
+          restrained: "Өлшеулі",
+          balanced: "Шиеленісті",
+          elevated: "Күшті",
+          dominant: "Жарылғыш",
+        },
+        readerRespect: {
+          strongly_minimized: "Провокациялық",
+          restrained: "Қысқа",
+          balanced: "Теңгерімді",
+          elevated: "Сенімді",
+          dominant: "Сарапшыға арналған",
+        },
+        morality: {
+          strongly_minimized: "Аморалды",
+          restrained: "Екіұшты",
+          balanced: "Текстурланған",
+          elevated: "Принципті",
+          dominant: "Әділетті",
+        },
+        sourceFidelity: {
+          strongly_minimized: "Таза ойдан шығарылған",
+          restrained: "Еркін шабыт",
+          balanced: "Аралас",
+          elevated: "Адал",
+          dominant: "Канондық",
+        },
+      },
+    },
+    bands: {
+      strongly_minimized: "Мүмкіндігінше азайтылған",
+      restrained: "Тежелген",
+      balanced: "Теңгерімді",
+      elevated: "Жоғарылатылған",
+      dominant: "Үстем",
+    },
+    intensity: {
+      strongly_minimized: "Ең аз",
+      restrained: "Төмен",
+      balanced: "Орташа",
+      elevated: "Жоғары",
+      dominant: "Ең жоғары",
+    },
+    status: {
+      pending: "күту",
+      writing: "жазу…",
+      revising: "өңдеу",
+      done: "дайын",
+      lowQuality: "төмен сапа",
+      readyToGenerate: "Генерацияға дайын",
+      pressForgeNarrative: "Агенттік конвейерді іске қосу үшін «Баяндауды соқ» батырмасын басыңыз.",
+      streamReady: "Дайын",
+      streamConnecting: "Қосылу",
+      streamOutlineReady: "Құрылым дайын",
+      streamWritingChapter: "Тарауды жазу",
+      streamRevisingChapter: "Тарауды өңдеу",
+      streamAttempt: "әрекет",
+      streamComplete: "Аяқталды",
+      streamError: "Қате",
+      streamRateLimited: "Сұраныс шегі таусылды",
+      streamUnauthenticated: "Аутентификацияланбаған",
+      rateLimitRetryPrefix: "Шек жетті. Қайта көріңіз",
+    },
+    buttons: {
+      forgeNarrative: "БАЯНДАУДЫ СОҚ",
+      brewingNarrative: "БАЯНДАУДЫ ДАЙЫНДАУ",
+      switch: "АУЫСТЫРУ",
+      dismiss: "ӨТКІЗІП ЖІБ",
+      downloadPdf: "PDF жүктеу",
+    },
+    channels: {
+      sectionLabel: "Арналарды калибрлеу",
+      description: "1–10 ауқымы. Баяндауды егжей-тегжейлі басқару.",
+    },
+    provider: {
+      sectionLabel: "Провайдер параметрлері",
+    },
+    progress: {
+      sectionLabel: "Ұзақ форманың прогресі",
+      tableOfContents: "Мазмұны",
+      chaptersUnit: "тар.",
+      wordsEachUnit: "сөз әрқайсысы",
+      error: "Қате",
+    },
+    warnings: {
+      stern_but_respectful:
+        "Жоғары агрессия мен жоғары оқырман құрметі қатал кәсібилікке, оскорбительді емес үнге алып келеді.",
+      preachy_risk: "Жоғары мораль мен төмен оқырман құрметі уағыздаушы прозаға айналуы мүмкін.",
+      detached_risk:
+        "Төмен мораль мен жоғары оқырман құрметі клиникалық түрде бөлшектенген естілуі мүмкін.",
+      neutral_collapse_risk:
+        "Барлық сырғытпалардың теңгерімді параметрлері стильдік бекіністерсіз жалпы прозаға алып келуі мүмкін.",
+      extreme_tone_risk:
+        "Экстремалды параметрлер жарамды, бірақ олардың дәйектілігін және қауіпсіздігін бағалау керек.",
+    },
+    hints: {
+      setGenreToBegin: "Бастау үшін жанр орнатыңыз және арналарды калибрлеңіз",
+    },
+    pdf: {
+      exportFailed: "PDF экспорттау қатесі — қайталап көріңіз",
+    },
+  },
+  ui: {
+    header: {
+      title: "Әңгіме миксері",
+      subtitle: "LoreForge — Калибрленген баяндау",
+      studioReady: "Студия дайын",
+    },
+    footer: {
+      tagline:
+        "LoreForge · Калибрленген баяндауды генерациялау · вайбты реттеңіз, әңгімені пісіріңіз",
+    },
+    agentLog: {
+      title: "Агент өзара әрекеттесу журналы",
+      empty: "Әзірге өзара әрекеттесулер жоқ — агент конвейерін көру үшін генерацияны бастаңыз.",
+    },
+    notFound: {
+      title: "Бет табылмады",
+      body: "Сіз сұраған бет жоқ немесе жылжытылған болуы мүмкін.",
+      returnHome: "Басты бетке",
+    },
+  },
+};
+
+export default kk;

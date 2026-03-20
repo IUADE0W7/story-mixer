@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.story_contracts import ProviderSelection, StoryContext
+from app.domain.story_contracts import StoryContext
 from app.domain.vibe_models import CalibrationProfile, VibeMetrics, VibeSliderInput
 
 
@@ -26,10 +26,10 @@ class LongFormRequest(BaseModel):
 
     context: StoryContext
     vibe: VibeSliderInput
-    provider: ProviderSelection
     chapter_count: int = Field(default=4, ge=2, le=10)
     chapter_word_target: int = Field(default=400, ge=100, le=2_000)
     revision_limit: int = Field(default=2, ge=1, le=3)
+    enable_critic: bool = True
     stream: bool = True
 
     def normalized_vibe(self) -> VibeMetrics:

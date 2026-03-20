@@ -5,17 +5,6 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class ProviderSelection(BaseModel):
-    """Provider and model choice for a generation request."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    provider: str = Field(min_length=1)
-    model: str = Field(min_length=1)
-    judge_model: str = Field(min_length=1)
-    temperature: float = Field(default=0.9, ge=0.0, le=2.0, strict=True)
-
-
 class StoryContext(BaseModel):
     """Context envelope that travels with a generation request."""
 

@@ -16,12 +16,6 @@ def test_real_provider_smoke_endpoint_disabled_by_default() -> None:
 
     settings.enable_real_provider_smoke = False
     payload = {
-        "provider": {
-            "provider": "openai",
-            "model": "gpt-4o-mini",
-            "judge_model": "gpt-4o-mini",
-            "temperature": 0.4,
-        },
         "prompt": "Smoke test prompt.",
     }
 
@@ -48,14 +42,11 @@ def test_real_provider_smoke_endpoint() -> None:
 
     settings.enable_real_provider_smoke = True
     settings.use_stub_llm = False
+    settings.llm_provider = provider
+    settings.llm_model = model
+    settings.llm_judge_model = judge_model
 
     payload = {
-        "provider": {
-            "provider": provider,
-            "model": model,
-            "judge_model": judge_model,
-            "temperature": 0.4,
-        },
         "prompt": prompt,
     }
 

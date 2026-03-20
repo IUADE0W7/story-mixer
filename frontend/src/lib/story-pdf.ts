@@ -218,6 +218,7 @@ export async function downloadStoryAsPdf(
   storyText: string,
   title: string,
   genre: string,
+  fileName?: string,
 ): Promise<void> {
   const theme = getTheme(genre);
   const doc = new jsPDF({ unit: "mm", format: "a4" });
@@ -291,6 +292,7 @@ export async function downloadStoryAsPdf(
     doc.text(`${i} / ${totalPages}`, pageWidth - margin, pageHeight - 12, { align: "right" });
   }
 
-  const safeTitle = title.replace(/[^a-z0-9]/gi, "-").toLowerCase().slice(0, 40) || "story";
+  const rawName = (fileName || title).replace(/×/g, "x");
+  const safeTitle = rawName.replace(/[^\p{L}0-9]+/giu, "-").replace(/^-|-$/g, "").slice(0, 60) || "story";
   doc.save(`${safeTitle}.pdf`);
 }
