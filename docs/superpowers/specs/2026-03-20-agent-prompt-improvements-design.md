@@ -35,39 +35,61 @@ Users report that vibe sliders (Aggression, Reader Respect, Morality, Source Fid
 - `_negative_for_morality() -> str`
 - `_negative_for_source_fidelity() -> str`
 
-Each method returns a "do NOT" rule matched to the current band. Examples:
+Each method uses `match self.band_for(<metric_value>)` on the metric value, following the same structure as the existing `_instruction_for_*` methods. **Unlike those methods** (which have no `case _` guard and return `None` implicitly on an unmatched band), the new methods must include an exhaustive guard. For example, `_negative_for_aggression` should end with:
 
-| Metric | Band | Negative instruction |
-|--------|------|----------------------|
-| aggression | DOMINANT | Do not let characters back down, soften conflict, or resolve tension peacefully. |
-| aggression | STRONGLY_MINIMIZED | Do not introduce combative framing, raised voices, or confrontational subtext. |
-| morality | DOMINANT | Do not portray ethically ambiguous outcomes without consequences. |
-| morality | STRONGLY_MINIMIZED | Do not insert moral lessons, redemption arcs, or ethical commentary. |
-| reader_respect | DOMINANT | Do not explain what is already implied; trust the reader to follow. |
-| reader_respect | STRONGLY_MINIMIZED | Do not soften abrasive language or add accommodating transitions for the reader's comfort. |
-| source_fidelity | DOMINANT | Do not invent plot events, rename characters, or deviate from canonical scene order. |
-| source_fidelity | STRONGLY_MINIMIZED | Do not reproduce canonical plot beats — invent freely. |
+```python
+case _:
+    raise ValueError(f"Unhandled band: {self.band_for(self.aggression)}")
+```
 
-`build_directives()` is updated to populate the new field by calling the corresponding `_negative_for_*` method.
+The `case _` guard in each method must reference that method's own metric value. Do not copy the aggression example verbatim into other methods — substitute the correct attribute: `self.reader_respect`, `self.morality`, `self.source_fidelity` in their respective methods, so the error message names the failing metric correctly.
 
-No new files. No changes to the external `CalibrationDirective` contract beyond the addition of `negative_instruction`.
+The guiding principle for middle bands (RESTRAINED, BALANCED, ELEVATED) is to prohibit drifting toward the opposite extreme — e.g., BALANCED aggression should not veer into either complete passivity or full combativeness.
+
+Example negatives across all five bands for aggression:
+
+| Band               | Negative instruction                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| STRONGLY_MINIMIZED | Do not introduce combative framing, raised voices, or confrontational subtext.        |
+| RESTRAINED         | Do not let conflict escalate beyond measured tension or tip into confrontation.       |
+| BALANCED           | Do not let the tone collapse into either pure passivity or unchecked aggression.      |
+| ELEVATED           | Do not pull back from tension or resolve confrontations too cleanly.                  |
+| DOMINANT           | Do not let characters back down, soften conflict, or resolve tension peacefully.      |
+
+The same five-band coverage applies to reader_respect, morality, and source_fidelity.
+
+`build_directives()` is the **only construction site** for `CalibrationDirective` in the codebase. It is updated to populate `negative_instruction` by calling the corresponding `_negative_for_*` method alongside the existing `_instruction_for_*` call. No other file constructs `CalibrationDirective` directly.
+
+**Serialization impact:** `negative_instruction` will appear in any `model_dump()` of `CalibrationDirective`. The full chain of types whose serialized output changes:
+
+- `CalibrationDirective.model_dump()` — directly gains the field
+- `VibeMetrics.model_dump()` — via the `directives` computed field
+- `CalibrationProfile.model_dump()` — via its `directives` field
+- `LongFormResult.model_dump()` — via `normalized_vibe: VibeMetrics` (`CalibrationProfile` is **not** present in `LongFormResult`)
+- The `complete` SSE event payload — `LongFormResult.model_dump(mode="json")` is the source; the frontend sees `negative_instruction` only through `normalized_vibe.directives`, not through `CalibrationProfile`
+
+The frontend handler in `use-long-form-stream.tsx` already discards the entire `complete` event payload (it only sets stream status); no code change is needed there. `story-streaming.ts` should be confirmed by inspection to similarly ignore unknown fields. Any backend test asserting exact JSON shape of the above types must be updated. The field is not optional; `build_directives()` must always supply it.
 
 ---
 
 ### Section 2 — Outline Agent Prompt Restructuring (`outline_agent.py`)
 
-The current flat prompt string is replaced with a proper system/user split, aligning with the `PromptEnvelope` pattern already used by the chapter writer.
+The current flat prompt string is replaced with a two-message list `[SystemMessage, HumanMessage]` passed to LangChain's `structured.ainvoke(messages)`. `structured = chat_model.with_structured_output(_OutlineSpec)` — LangChain chains produced by `with_structured_output` accept a list of `BaseMessage` objects via `ainvoke`. This API path is validated by the smoke test (see Testing section).
 
 **System prompt content (in order):**
+
 1. Role identity: "You are LoreForge outline architect."
 2. Vibe directives block — all four metrics, each formatted as:
-   ```
+
+   ```text
    - {metric_name}: {instruction} | NOT: {negative_instruction}
    ```
+
 3. Explicit instruction that vibe must shape the outline structure itself — chapter arcs, turning points, and pacing must reflect the calibration, not just the eventual prose.
 4. Language constraint (if set).
 
 **User prompt content (in order):**
+
 1. Language constraint (if set) — repeated here as an output-level reminder.
 2. Story brief.
 3. Genre and public title.
@@ -76,10 +98,10 @@ The current flat prompt string is replaced with a proper system/user split, alig
 6. Closing instruction: "Ensure chapters form a coherent narrative arc from opening to resolution."
 
 **Bug fixes included:**
+
 - Line 101: `~{request.chapter_word_target}n` → `~{request.chapter_word_target}\n`
 - Lines 103–106: JSON field list reformatted with proper newlines between entries.
-
-The `StructuredOutlineAgent` passes this as a two-message list `[SystemMessage, HumanMessage]` to LangChain, which already supports this calling convention.
+- Line 111 (`logger.debug` for prompt length only — the `logger.info` line at 110 does not reference `prompt` and is unaffected): build the message list first, assigned to `messages`, then log `sum(len(m.content) for m in messages)`.
 
 ---
 
@@ -87,21 +109,32 @@ The `StructuredOutlineAgent` passes this as a two-message list `[SystemMessage, 
 
 `_build_chapter_prompt` is restructured so vibe directives anchor the model before any story content.
 
+**Signature change:** The parameter `calibration_directive_lines: str` is replaced with `calibration: CalibrationProfile`. Add `from app.domain.vibe_models import CalibrationProfile` to the imports at the top of `long_form_orchestrator.py` — this import does not currently exist because `CalibrationProfile` was never referenced by name in that file. The function builds the `| NOT:` formatted directive block itself by iterating `calibration.directives`.
+
+The call site in `LongFormOrchestrator.stream()` (around line 169) must pass `calibration` directly. The `directive_lines` string variable (built at lines 128–130) becomes dead code — remove it.
+
+**Vibe recap band lookup:** `calibration.directives` preserves the exact order returned by `build_directives()` — `CalibrationProfile` is constructed via `VibeMetrics.to_calibration_profile()`, which calls `build_directives()` and passes the result directly to `CalibrationProfile(directives=...)` with no reordering. The fixed order is: index 0 = aggression, index 1 = reader_respect, index 2 = morality, index 3 = source_fidelity. Use `calibration.directives[0]` for aggression and `calibration.directives[2]` for morality.
+
 **System prompt content (in order):**
+
 1. Role identity: "You are LoreForge, a calibrated narrative model writing a long-form story one chapter at a time."
 2. Vibe directives block — all four metrics, formatted as:
-   ```
+
+   ```text
    - {metric_name}: {instruction} | NOT: {negative_instruction}
    ```
+
 3. Language constraint (if set) — moved here from the user prompt to avoid duplication.
 4. Standing rule: "Write only the chapter body — no headers, no preamble."
 
 **User prompt content (in order):**
-1. One-line vibe recap at the top (reinforcement anchor):
+
+1. One-line vibe recap at the top (reinforcement anchor). Use f-string interpolation on `calibration.directives[0].band` and `calibration.directives[2].band` — `MetricBand` is a `StrEnum` so f-string interpolation yields the enum value directly (e.g., `"dominant"`, `"strongly_minimized"`):
+
+   ```text
+   Tone: {aggression_directive.band} aggression, {morality_directive.band} morality — hold this throughout.
    ```
-   Tone: {band_label for aggression}, {band_label for morality} — hold this throughout.
-   ```
-   This is a short restatement that pulls the model's attention back to vibe immediately before the write instruction, without repeating the full directive list.
+
 2. Story brief.
 3. Genre.
 4. Continuity block (previous chapter summaries), if any.
@@ -114,17 +147,20 @@ The `StructuredOutlineAgent` passes this as a two-message list `[SystemMessage, 
 
 ## What Is Not Changing
 
-- `CalibrationProfile`, `VibeMetrics`, `VibeSliderInput`, `MetricBand`, and all other domain contracts — no changes to external shape.
+- `VibeMetrics`, `VibeSliderInput`, `MetricBand`, `CalibrationProfile`, `long_form_contracts.py` — no structural changes to field names, types, or counts.
 - `LocalOutlineAgent` (stub) — unaffected.
 - `LLMGateway`, `PromptEnvelope`, `model_factory` — unaffected.
-- SSE event structure and orchestrator logic — unaffected.
-- Tests not related to prompt content — unaffected.
+- SSE event structure and orchestrator logic (aside from the `_build_chapter_prompt` call site and removal of `directive_lines`) — unaffected.
+- Tests unrelated to prompt content, directive serialization, or `LongFormResult` JSON shape — unaffected.
 
 ---
 
 ## Testing
 
-- Existing unit tests for `VibeMetrics.build_directives()` updated to assert `negative_instruction` is populated and non-empty for each band of each metric.
-- New snapshot/assertion tests for `_build_chapter_prompt` and `StructuredOutlineAgent.generate_outline` prompt output to verify directive placement and bug fix.
-- Manual smoke test: `make smoke-stream` with `USE_STUB_LLM=true` to confirm pipeline still completes.
+- **New** unit tests for `VibeMetrics.build_directives()` (no such tests currently exist): assert `len(directive.negative_instruction) > 0` for all five bands of each metric (20 cases total — trigger each band by passing values in the ranges defined by `band_for`).
+- Regression check: any existing test that serializes `CalibrationDirective`, `VibeMetrics`, `CalibrationProfile`, or `LongFormResult` to JSON must be updated to expect the `negative_instruction` field.
+- Frontend consumer check: confirm by inspection that `story-streaming.ts` ignores unknown fields in the `complete` event payload. (`use-long-form-stream.tsx` already discards the payload — no code change needed there.)
+- New assertion tests for `_build_chapter_prompt` prompt output: import the function directly from `long_form_orchestrator`; construct a `CalibrationProfile` via `VibeMetrics(...).to_calibration_profile()` to pass as the `calibration` argument. Verify directive block appears in the returned `PromptEnvelope.system_prompt` with `| NOT:` format, vibe recap appears at the top of `PromptEnvelope.user_prompt` with correct band string values, language instruction is absent from `user_prompt`.
+- New assertion tests for `StructuredOutlineAgent` message construction: mock `chat_model.with_structured_output` to capture the argument passed to `ainvoke`; verify it is a two-element list, system message content contains directives with `| NOT:`, user message content contains story brief and JSON requirements, word target line ends with `\n`.
+- Manual smoke test: `make smoke-stream` with `USE_STUB_LLM=true` to confirm pipeline still completes end-to-end and validates the LangChain message-list API path for the outline agent.
 - Manual qualitative test with a real provider at extreme slider values (all-1 vs all-10) to verify perceived vibe difference.
