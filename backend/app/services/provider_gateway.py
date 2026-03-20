@@ -64,6 +64,11 @@ class HybridLangChainGateway(LLMGateway):
             settings.llm_model,
             len(prompt.user_prompt),
         )
+        logger.debug(
+            "stream_text prompt\n--- system ---\n%s\n--- user ---\n%s",
+            prompt.system_prompt,
+            prompt.user_prompt,
+        )
 
         chat_model = build_chat_model()
         messages = [
@@ -115,6 +120,11 @@ class HybridLangChainGateway(LLMGateway):
             settings.llm_provider,
             settings.llm_model,
             len(prompt.user_prompt),
+        )
+        logger.debug(
+            "generate_text prompt\n--- system ---\n%s\n--- user ---\n%s",
+            prompt.system_prompt,
+            prompt.user_prompt,
         )
 
         chat_model = build_chat_model()
