@@ -439,7 +439,7 @@ export function VibeController({
   return (
     <div className="space-y-4">
       {!token && (
-        <AuthModal onAuthenticated={(t) => onTokenChange(t)} />
+        <AuthModal onAuthenticated={(newToken) => onTokenChange(newToken)} />
       )}
 
       {/* ── Unified grid: top row + bottom row share the same 3-col tracks ── */}
