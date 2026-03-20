@@ -24,3 +24,4 @@ docs/
 # Misc
 *.log
 .DS_Store
+scripts/
