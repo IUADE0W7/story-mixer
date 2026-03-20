@@ -8,11 +8,11 @@ const VALID_TOKEN =
   "eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJ1c2VyX2lkIjoiYWJjMTIzIn0." +
   "signature";
 
-// Payload with no padding needed (length % 4 === 0 already)
-// { "email": "a@b.co" }
-const UNPADDED_TOKEN =
+// Payload with padding needed (length % 4 === 2, needs "==" padding)
+// { "email": "test@example.com" }
+const NEEDS_PADDING_TOKEN =
   "eyJhbGciOiJIUzI1NiJ9." +
-  "eyJlbWFpbCI6ImFAYi5jbyJ9." +
+  "eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifQ." +
   "signature";
 
 describe("decodeEmail", () => {
@@ -21,11 +21,11 @@ describe("decodeEmail", () => {
   });
 
   it("handles base64url payloads that need re-padding", () => {
-    expect(decodeEmail(UNPADDED_TOKEN)).toBe("a@b.co");
+    expect(decodeEmail(NEEDS_PADDING_TOKEN)).toBe("test@example.com");
   });
 
   it("returns null for a malformed token (not three segments)", () => {
-    expect(decodeEmail("not.a.jwt.at.all.extra")).toBe(null);
+    expect(decodeEmail("onlyone")).toBe(null);
   });
 
   it("returns null when payload has no email field", () => {
