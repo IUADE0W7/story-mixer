@@ -34,7 +34,7 @@ async def test_stream_text_logs_system_prompt(caplog: pytest.LogCaptureFixture) 
     with patch("app.services.provider_gateway.build_chat_model", return_value=mock_model):
         with caplog.at_level(logging.DEBUG, logger="app.services.provider_gateway"):
             gw = HybridLangChainGateway()
-            chunks = [c async for c in gw.stream_text(prompt)]
+            _ = [c async for c in gw.stream_text(prompt)]
 
     assert any(_SYSTEM in r.message for r in caplog.records)
 
@@ -88,6 +88,6 @@ async def test_generate_text_logs_user_prompt(caplog: pytest.LogCaptureFixture) 
     assert any(_USER in r.message for r in caplog.records)
 
 
-async def _async_iter(items: list):
+async def _async_iter(items: list[MagicMock]) -> AsyncIterator[MagicMock]:
     for item in items:
         yield item
