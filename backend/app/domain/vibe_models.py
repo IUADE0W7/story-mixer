@@ -202,7 +202,8 @@ class VibeMetrics(BaseModel):
     def _instruction_for_aggression(self) -> str:
         """Return the aggression prompt instruction for the current band."""
 
-        match self.band_for(self.aggression):
+        band = self.band_for(self.aggression)
+        match band:
             case MetricBand.STRONGLY_MINIMIZED:
                 return "Prefer gentle, de-escalating language and avoid combative framing."
             case MetricBand.RESTRAINED:
@@ -219,10 +220,14 @@ class VibeMetrics(BaseModel):
                     "Make the narration forceful and high-pressure "
                     "without becoming incoherent or abusive."
                 )
+            case _:
+                raise ValueError(f"Unhandled band: {band}")
 
     def _negative_for_aggression(self) -> str:
         """Return the aggression negative constraint for the current band."""
-        match self.band_for(self.aggression):
+
+        band = self.band_for(self.aggression)
+        match band:
             case MetricBand.STRONGLY_MINIMIZED:
                 return "Do not introduce combative framing, raised voices, or confrontational subtext."
             case MetricBand.RESTRAINED:
@@ -234,12 +239,13 @@ class VibeMetrics(BaseModel):
             case MetricBand.DOMINANT:
                 return "Do not let characters back down, soften conflict, or resolve tension peacefully."
             case _:
-                raise ValueError(f"Unhandled band: {self.band_for(self.aggression)}")
+                raise ValueError(f"Unhandled band: {band}")
 
     def _instruction_for_reader_respect(self) -> str:
         """Return the reader-respect prompt instruction for the current band."""
 
-        match self.band_for(self.reader_respect):
+        band = self.band_for(self.reader_respect)
+        match band:
             case MetricBand.STRONGLY_MINIMIZED:
                 return (
                     "Use an intentionally abrasive, dismissive stance "
@@ -262,10 +268,14 @@ class VibeMetrics(BaseModel):
                     "Assume an expert reader and maintain sharp, professional "
                     "clarity with no condescension."
                 )
+            case _:
+                raise ValueError(f"Unhandled band: {band}")
 
     def _negative_for_reader_respect(self) -> str:
         """Return the reader-respect negative constraint for the current band."""
-        match self.band_for(self.reader_respect):
+
+        band = self.band_for(self.reader_respect)
+        match band:
             case MetricBand.STRONGLY_MINIMIZED:
                 return "Do not soften abrasive language or add accommodating transitions for the reader's comfort."
             case MetricBand.RESTRAINED:
@@ -277,12 +287,13 @@ class VibeMetrics(BaseModel):
             case MetricBand.DOMINANT:
                 return "Do not explain what is already implied; trust the reader to follow without aid."
             case _:
-                raise ValueError(f"Unhandled band: {self.band_for(self.reader_respect)}")
+                raise ValueError(f"Unhandled band: {band}")
 
     def _instruction_for_morality(self) -> str:
         """Return the morality prompt instruction for the current band."""
 
-        match self.band_for(self.morality):
+        band = self.band_for(self.morality)
+        match band:
             case MetricBand.STRONGLY_MINIMIZED:
                 return (
                     "Frame the world with minimal moral judgment "
@@ -304,10 +315,14 @@ class VibeMetrics(BaseModel):
                     "Make the story's moral stance explicit, but keep it "
                     "embedded in the narration and action."
                 )
+            case _:
+                raise ValueError(f"Unhandled band: {band}")
 
     def _negative_for_morality(self) -> str:
         """Return the morality negative constraint for the current band."""
-        match self.band_for(self.morality):
+
+        band = self.band_for(self.morality)
+        match band:
             case MetricBand.STRONGLY_MINIMIZED:
                 return "Do not insert moral lessons, redemption arcs, or ethical commentary."
             case MetricBand.RESTRAINED:
@@ -319,12 +334,13 @@ class VibeMetrics(BaseModel):
             case MetricBand.DOMINANT:
                 return "Do not portray ethically ambiguous outcomes without moral weight or consequence."
             case _:
-                raise ValueError(f"Unhandled band: {self.band_for(self.morality)}")
+                raise ValueError(f"Unhandled band: {band}")
 
     def _instruction_for_source_fidelity(self) -> str:
         """Return the source-fidelity prompt instruction for the current band."""
 
-        match self.band_for(self.source_fidelity):
+        band = self.band_for(self.source_fidelity)
+        match band:
             case MetricBand.STRONGLY_MINIMIZED:
                 return (
                     "Use source tales only as loose inspiration; feel free to invent entirely new "
@@ -350,10 +366,14 @@ class VibeMetrics(BaseModel):
                     "Stay as close as possible to the canonical facts and sequence of the source "
                     "tales; rewrite only the tone and framing, not the story events."
                 )
+            case _:
+                raise ValueError(f"Unhandled band: {band}")
 
     def _negative_for_source_fidelity(self) -> str:
         """Return the source-fidelity negative constraint for the current band."""
-        match self.band_for(self.source_fidelity):
+
+        band = self.band_for(self.source_fidelity)
+        match band:
             case MetricBand.STRONGLY_MINIMIZED:
                 return "Do not reproduce canonical plot beats — invent freely and diverge from the source."
             case MetricBand.RESTRAINED:
@@ -365,7 +385,7 @@ class VibeMetrics(BaseModel):
             case MetricBand.DOMINANT:
                 return "Do not invent plot events, rename characters, or deviate from canonical scene order."
             case _:
-                raise ValueError(f"Unhandled band: {self.band_for(self.source_fidelity)}")
+                raise ValueError(f"Unhandled band: {band}")
 
 
 class VibeSliderInput(BaseModel):
