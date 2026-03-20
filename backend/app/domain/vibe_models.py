@@ -47,6 +47,7 @@ class CalibrationDirective(BaseModel):
     value: float = Field(ge=0.0, le=1.0, strict=True)
     band: MetricBand
     instruction: str
+    negative_instruction: str
 
 
 class VibeMetrics(BaseModel):
@@ -81,24 +82,28 @@ class VibeMetrics(BaseModel):
                 value=self.aggression,
                 band=self.band_for(self.aggression),
                 instruction=self._instruction_for_aggression(),
+                negative_instruction=self._negative_for_aggression(),
             ),
             CalibrationDirective(
                 metric_name="reader_respect",
                 value=self.reader_respect,
                 band=self.band_for(self.reader_respect),
                 instruction=self._instruction_for_reader_respect(),
+                negative_instruction=self._negative_for_reader_respect(),
             ),
             CalibrationDirective(
                 metric_name="morality",
                 value=self.morality,
                 band=self.band_for(self.morality),
                 instruction=self._instruction_for_morality(),
+                negative_instruction=self._negative_for_morality(),
             ),
             CalibrationDirective(
                 metric_name="source_fidelity",
                 value=self.source_fidelity,
                 band=self.band_for(self.source_fidelity),
                 instruction=self._instruction_for_source_fidelity(),
+                negative_instruction=self._negative_for_source_fidelity(),
             ),
         )
 
@@ -215,6 +220,22 @@ class VibeMetrics(BaseModel):
                     "without becoming incoherent or abusive."
                 )
 
+    def _negative_for_aggression(self) -> str:
+        """Return the aggression negative constraint for the current band."""
+        match self.band_for(self.aggression):
+            case MetricBand.STRONGLY_MINIMIZED:
+                return "Do not introduce combative framing, raised voices, or confrontational subtext."
+            case MetricBand.RESTRAINED:
+                return "Do not let conflict escalate beyond measured tension or tip into confrontation."
+            case MetricBand.BALANCED:
+                return "Do not let the tone collapse into either pure passivity or unchecked aggression."
+            case MetricBand.ELEVATED:
+                return "Do not pull back from tension or resolve confrontations too cleanly."
+            case MetricBand.DOMINANT:
+                return "Do not let characters back down, soften conflict, or resolve tension peacefully."
+            case _:
+                raise ValueError(f"Unhandled band: {self.band_for(self.aggression)}")
+
     def _instruction_for_reader_respect(self) -> str:
         """Return the reader-respect prompt instruction for the current band."""
 
@@ -242,6 +263,22 @@ class VibeMetrics(BaseModel):
                     "clarity with no condescension."
                 )
 
+    def _negative_for_reader_respect(self) -> str:
+        """Return the reader-respect negative constraint for the current band."""
+        match self.band_for(self.reader_respect):
+            case MetricBand.STRONGLY_MINIMIZED:
+                return "Do not soften abrasive language or add accommodating transitions for the reader's comfort."
+            case MetricBand.RESTRAINED:
+                return "Do not over-explain or provide hand-holding that isn't warranted."
+            case MetricBand.BALANCED:
+                return "Do not drift into either dismissive hostility or over-accommodating hand-holding."
+            case MetricBand.ELEVATED:
+                return "Do not condescend, simplify unnecessarily, or withhold context the reader needs."
+            case MetricBand.DOMINANT:
+                return "Do not explain what is already implied; trust the reader to follow without aid."
+            case _:
+                raise ValueError(f"Unhandled band: {self.band_for(self.reader_respect)}")
+
     def _instruction_for_morality(self) -> str:
         """Return the morality prompt instruction for the current band."""
 
@@ -267,6 +304,22 @@ class VibeMetrics(BaseModel):
                     "Make the story's moral stance explicit, but keep it "
                     "embedded in the narration and action."
                 )
+
+    def _negative_for_morality(self) -> str:
+        """Return the morality negative constraint for the current band."""
+        match self.band_for(self.morality):
+            case MetricBand.STRONGLY_MINIMIZED:
+                return "Do not insert moral lessons, redemption arcs, or ethical commentary."
+            case MetricBand.RESTRAINED:
+                return "Do not let a clear moral stance emerge or steer the story toward resolution."
+            case MetricBand.BALANCED:
+                return "Do not let the story become either nihilistically amoral or preachy."
+            case MetricBand.ELEVATED:
+                return "Do not portray the protagonist's moral convictions as naive or ineffective."
+            case MetricBand.DOMINANT:
+                return "Do not portray ethically ambiguous outcomes without moral weight or consequence."
+            case _:
+                raise ValueError(f"Unhandled band: {self.band_for(self.morality)}")
 
     def _instruction_for_source_fidelity(self) -> str:
         """Return the source-fidelity prompt instruction for the current band."""
@@ -297,6 +350,22 @@ class VibeMetrics(BaseModel):
                     "Stay as close as possible to the canonical facts and sequence of the source "
                     "tales; rewrite only the tone and framing, not the story events."
                 )
+
+    def _negative_for_source_fidelity(self) -> str:
+        """Return the source-fidelity negative constraint for the current band."""
+        match self.band_for(self.source_fidelity):
+            case MetricBand.STRONGLY_MINIMIZED:
+                return "Do not reproduce canonical plot beats — invent freely and diverge from the source."
+            case MetricBand.RESTRAINED:
+                return "Do not follow the source plot closely; significant invention is expected."
+            case MetricBand.BALANCED:
+                return "Do not stray so far from the source that recognisable moments vanish entirely."
+            case MetricBand.ELEVATED:
+                return "Do not invent new plot events or remove named characters from the story."
+            case MetricBand.DOMINANT:
+                return "Do not invent plot events, rename characters, or deviate from canonical scene order."
+            case _:
+                raise ValueError(f"Unhandled band: {self.band_for(self.source_fidelity)}")
 
 
 class VibeSliderInput(BaseModel):
