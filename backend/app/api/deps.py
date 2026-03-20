@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 import jwt as pyjwt
@@ -13,6 +14,8 @@ from app.persistence.db import get_session, session_factory
 from app.persistence.models import User
 from app.services.auth_service import verify_token
 from app.services.rate_limit_service import check_rate_limit_and_record
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimitExceeded(Exception):
@@ -34,14 +37,18 @@ async def get_current_user(
     try:
         payload = verify_token(token)
     except pyjwt.ExpiredSignatureError:
+        logger.warning("Auth token expired")
         raise HTTPException(status_code=401, detail="Token expired")
     except pyjwt.InvalidTokenError:
+        logger.warning("Auth token invalid")
         raise HTTPException(status_code=401, detail="Invalid token")
 
     user = await db.get(User, payload["user_id"])
     if user is None:
+        logger.warning("Auth token valid but user_id=%s not found in DB", payload["user_id"])
         raise HTTPException(status_code=401, detail="User not found")
 
+    logger.info("Auth token validated: user_id=%s email=%s", user.id, user.email)
     return user
 
 
@@ -66,4 +73,9 @@ async def check_rate_limit(
     if result is False:
         raise HTTPException(status_code=401, detail="User not found")
     if result is not None:
+        logger.warning(
+            "Rate limit exceeded for user_id=%s retry_after=%s",
+            current_user.id,
+            result.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
         raise RateLimitExceeded(result)
