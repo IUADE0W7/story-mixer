@@ -6,6 +6,7 @@ import logging
 
 from pydantic import BaseModel, ConfigDict
 
+from app.config import settings
 from app.domain.long_form_contracts import ChapterOutline, LongFormRequest
 from app.domain.vibe_models import CalibrationProfile
 from app.services.model_factory import build_chat_model
@@ -74,16 +75,25 @@ class StructuredOutlineAgent:
         request: LongFormRequest,
         calibration: CalibrationProfile,
     ) -> list[ChapterOutline]:
-        chat_model = build_chat_model(request.provider, for_judge=False)
+        chat_model = build_chat_model(for_judge=False)
         structured = chat_model.with_structured_output(_OutlineSpec)
 
         directive_lines = "\n".join(
             f"- {d.metric_name}: {d.instruction}" for d in calibration.directives
         )
         genre = request.context.genre or "unspecified"
+        lang = (request.context.language or "").strip().lower()
+        lang_instruction = ""
+        if lang in ("uk", "ua", "ukr", "ukraine"):
+            lang_instruction = "Output language requirement: Ukrainian only (Cyrillic). Do not switch to English.\n\n"
+        elif lang in ("ru", "rus", "russian"):
+            lang_instruction = "Output language requirement: Russian only (Cyrillic). Do not switch to English.\n\n"
+        elif lang in ("kk", "kaz", "kazakh"):
+            lang_instruction = "Output language requirement: Kazakh only (Cyrillic script). Do not switch to English or Russian.\n\n"
 
         prompt = (
             "You are LoreForge outline architect. Generate a structured chapter plan.\n\n"
+            f"{lang_instruction}"
             f"Story brief: {request.context.user_prompt}\n"
             f"Genre: {genre}\n"
             f"Public title: {request.context.public_title or 'untitled'}\n"
@@ -97,8 +107,10 @@ class StructuredOutlineAgent:
             "Ensure chapters form a coherent narrative arc from opening to resolution."
         )
 
-        logger.debug("Outline prompt provider=%s", request.provider.provider)
+        logger.info("Outline agent: provider=%s model=%s", settings.llm_provider, settings.llm_model)
+        logger.debug("Outline prompt: %d chars", len(prompt))
         result: _OutlineSpec = await structured.ainvoke(prompt)  # type: ignore[assignment]
+        logger.info("Outline response received: %d chapters parsed", len(result.chapters))
 
         chapters = sorted(result.chapters, key=lambda c: c.number)
         return [
