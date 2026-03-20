@@ -14,7 +14,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.config import settings
 from app.domain.long_form_contracts import LongFormRequest
 from app.services.contracts import PromptEnvelope
-from app.services.critic_agent import LocalChapterCritic, StructuredChapterCritic
 from app.services.long_form_orchestrator import LongFormOrchestrator
 from app.services.model_factory import verify_ollama_connectivity
 from app.services.outline_agent import LocalOutlineAgent, StructuredOutlineAgent
@@ -37,16 +36,10 @@ def build_long_form_orchestrator() -> LongFormOrchestrator:
     """Build a long-form orchestrator with stub or production agents."""
 
     llm_gateway = LocalStubGateway() if settings.use_stub_llm else HybridLangChainGateway()
-    if settings.use_stub_llm:
-        outline_agent = LocalOutlineAgent()
-        critic_agent  = LocalChapterCritic()
-    else:
-        outline_agent = StructuredOutlineAgent()
-        critic_agent  = StructuredChapterCritic()
+    outline_agent = LocalOutlineAgent() if settings.use_stub_llm else StructuredOutlineAgent()
     return LongFormOrchestrator(
         llm_gateway=llm_gateway,
         outline_agent=outline_agent,
-        critic_agent=critic_agent,
     )
 
 
@@ -66,11 +59,7 @@ async def generate_long_form_story(
 ) -> StreamingResponse:
     """Stream a multi-chapter story through the outline → write → critic pipeline."""
 
-    logger.info(
-        "Story generation requested: chapters=%d critic=%s",
-        request.chapter_count,
-        request.enable_critic,
-    )
+    logger.info("Story generation requested: chapters=%d", request.chapter_count)
     orchestrator = build_long_form_orchestrator()
     return StreamingResponse(
         _stream_long_form_events(orchestrator.stream(request=request)),

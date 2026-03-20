@@ -44,9 +44,7 @@ const en = {
       wordsPerChapter: "Words/ch.",
       provider: "Provider",
       model: "Model",
-      judgeModel: "Judge Model",
       temperature: "Temperature",
-      enableCritic: "Enable critic agent",
     },
     genres: {
       fantasy: "Fantasy",

@@ -46,9 +46,7 @@ const ru: typeof en = {
       wordsPerChapter: "Слов/гл.",
       provider: "Провайдер",
       model: "Модель",
-      judgeModel: "Модель-судья",
       temperature: "Температура",
-      enableCritic: "Включить агента-критика",
     },
     genres: {
       fantasy: "Фэнтези",

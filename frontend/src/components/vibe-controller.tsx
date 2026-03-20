@@ -337,7 +337,6 @@ function formatStreamStatus(status: StreamStatus, t: (key: import("@/locales/ind
     case "connecting":       return t("vibe.status.streamConnecting");
     case "outline_ready":    return t("vibe.status.streamOutlineReady");
     case "writing_chapter":  return `${t("vibe.status.streamWritingChapter")} ${status.chapter}`;
-    case "revising_chapter": return `${t("vibe.status.streamRevisingChapter")} ${status.chapter} (${t("vibe.status.streamAttempt")} ${status.attempt})`;
     case "complete":         return t("vibe.status.streamComplete");
     case "error":            return t("vibe.status.streamError");
     case "backend":          return status.message;
@@ -356,10 +355,9 @@ export function VibeController({
   const [sourceTaleA, setSourceTaleA]     = useState<string>("");
   const [sourceTaleB, setSourceTaleB]     = useState<string>("");
   const [userPrompt, setUserPrompt]       = useState<string>("");
-  const [genre, setGenre]                 = useState<string>("");
+  const [genre, setGenre]                 = useState<string>(GENRE_OPTIONS[0] ?? "");
   const [chapterCount, setChapterCount]   = useState(4);
   const [chapterWords, setChapterWords]   = useState(400);
-  const [enableCritic, setEnableCritic]   = useState(true);
   const [langBannerDismissed, setLangBannerDismissed] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
@@ -407,7 +405,6 @@ export function VibeController({
     const missing: string[] = [];
     if (!sourceTaleA.trim()) missing.push(t("vibe.validation.originalStoryA"));
     if (!sourceTaleB.trim()) missing.push(t("vibe.validation.originalStoryB"));
-    if (!genre) missing.push(t("vibe.validation.genre"));
     if (missing.length > 0) {
       setValidationError(`${t("vibe.validation.pleaseFillIn")} ${missing.join(", ")}`);
       return;
@@ -424,7 +421,6 @@ export function VibeController({
       },
       chapterCount,
       chapterWordTarget: chapterWords,
-      enableCritic,
       token,
     });
   };
@@ -545,10 +541,10 @@ export function VibeController({
                   id="chapter-count"
                   type="number"
                   min={2}
-                  max={10}
+                  max={4}
                   step={1}
                   value={chapterCount}
-                  onChange={(e) => setChapterCount(Math.max(2, Math.min(10, Number(e.target.value))))}
+                  onChange={(e) => setChapterCount(Math.max(2, Math.min(4, Number(e.target.value))))}
                   style={inputStyle}
                   className="w-full border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] text-center"
                 />
@@ -561,28 +557,15 @@ export function VibeController({
                   id="chapter-words"
                   type="number"
                   min={100}
-                  max={2000}
+                  max={500}
                   step={100}
                   value={chapterWords}
-                  onChange={(e) => setChapterWords(Math.max(100, Math.min(2000, Number(e.target.value))))}
+                  onChange={(e) => setChapterWords(Math.max(100, Math.min(500, Number(e.target.value))))}
                   style={inputStyle}
                   className="w-full border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] text-center"
                 />
               </div>
             </div>
-
-            <label htmlFor="enable-critic" className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                id="enable-critic"
-                type="checkbox"
-                checked={enableCritic}
-                onChange={(e) => setEnableCritic(e.target.checked)}
-                className="accent-[#14B8A6] w-3.5 h-3.5 cursor-pointer"
-              />
-              <span className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-                {t("vibe.fields.enableCritic")}
-              </span>
-            </label>
 
           </div>
 
@@ -737,8 +720,7 @@ export function VibeController({
                 const statusColor: Record<ChapterState["status"], string> = {
                   pending:    "var(--cream-faint)",
                   generating: "var(--teal)",
-                  revising:   "var(--amber)",
-                  complete:   ch.accepted ? "var(--teal)" : "var(--amber)",
+                  complete:   "var(--teal)",
                 };
                 return (
                   <div
@@ -746,9 +728,9 @@ export function VibeController({
                     className="rounded-lg p-3 space-y-2"
                     style={{
                       background: "var(--surface)",
-                      borderTop: `1px solid ${ch.status === "generating" ? "var(--teal)" : ch.status === "revising" ? "var(--amber)" : "var(--border)"}`,
-                      borderRight: `1px solid ${ch.status === "generating" ? "var(--teal)" : ch.status === "revising" ? "var(--amber)" : "var(--border)"}`,
-                      borderBottom: `1px solid ${ch.status === "generating" ? "var(--teal)" : ch.status === "revising" ? "var(--amber)" : "var(--border)"}`,
+                      borderTop: `1px solid ${ch.status === "generating" ? "var(--teal)" : "var(--border)"}`,
+                      borderRight: `1px solid ${ch.status === "generating" ? "var(--teal)" : "var(--border)"}`,
+                      borderBottom: `1px solid ${ch.status === "generating" ? "var(--teal)" : "var(--border)"}`,
                       borderLeft: `3px solid ${statusColor[ch.status]}`,
                       transition: "border-color 0.3s ease",
                     }}
@@ -763,8 +745,7 @@ export function VibeController({
                       >
                         {ch.status === "pending" ? t("vibe.status.pending") :
                          ch.status === "generating" ? t("vibe.status.writing") :
-                         ch.status === "revising" ? `${t("vibe.status.revising")} (${ch.revisionCount})` :
-                         ch.accepted ? `${t("vibe.status.done")} · ${ch.wordCount}w` : `${t("vibe.status.lowQuality")} · ${ch.wordCount}w`}
+                         `${t("vibe.status.done")} · ${ch.wordCount}w`}
                       </span>
                     </div>
 

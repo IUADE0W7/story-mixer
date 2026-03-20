@@ -46,9 +46,7 @@ const uk: typeof en = {
       wordsPerChapter: "Слів/розд.",
       provider: "Провайдер",
       model: "Модель",
-      judgeModel: "Модель-суддя",
       temperature: "Температура",
-      enableCritic: "Увімкнути агента-критика",
     },
     genres: {
       fantasy: "Фентезі",

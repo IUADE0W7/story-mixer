@@ -40,10 +40,10 @@ def verify_ollama_connectivity(base_url: str | None = None, timeout_seconds: flo
         ) from exc
 
 
-def build_chat_model(*, for_judge: bool = False) -> BaseChatModel:
+def build_chat_model() -> BaseChatModel:
     """Create a configured chat model from app config so orchestration code stays provider-agnostic."""
 
-    model_name = settings.llm_judge_model if for_judge else settings.llm_model
+    model_name = settings.llm_model
     provider_name = settings.llm_provider.strip().lower()
     temperature = settings.llm_temperature
 

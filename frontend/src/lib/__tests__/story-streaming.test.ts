@@ -1,83 +1,84 @@
 import { describe, expect, it } from "vitest";
-import { buildStreamRequest, parseSseChunk, DEFAULT_PROVIDER_CONFIG } from "../story-streaming";
+import { buildLongFormRequest, parseSseChunk } from "../story-streaming";
 import type { VibeValues } from "../vibe-bands";
 
 const BASE_VIBE: VibeValues = { aggression: 5, readerRespect: 6, morality: 5, sourceFidelity: 7 };
+const BASE_DRAFT = { values: BASE_VIBE };
 
 // ---------------------------------------------------------------------------
-// buildStreamRequest — language in REST payload
+// buildLongFormRequest — language in REST payload
 // ---------------------------------------------------------------------------
 
-describe("buildStreamRequest — language field in REST payload", () => {
+describe("buildLongFormRequest — language field in REST payload", () => {
   it("includes language='en' when English is selected", () => {
-    const payload = buildStreamRequest({ values: BASE_VIBE, language: "en" });
+    const payload = buildLongFormRequest({ ...BASE_DRAFT, language: "en" }, 4, 400);
     expect(payload.context.language).toBe("en");
   });
 
   it("includes language='uk' when Ukrainian is selected", () => {
-    const payload = buildStreamRequest({ values: BASE_VIBE, language: "uk" });
+    const payload = buildLongFormRequest({ ...BASE_DRAFT, language: "uk" }, 4, 400);
     expect(payload.context.language).toBe("uk");
   });
 
   it("defaults language to 'en' when language is omitted", () => {
-    const payload = buildStreamRequest({ values: BASE_VIBE });
+    const payload = buildLongFormRequest(BASE_DRAFT, 4, 400);
     expect(payload.context.language).toBe("en");
   });
 
   it("defaults language to 'en' when language is undefined", () => {
-    const payload = buildStreamRequest({ values: BASE_VIBE, language: undefined });
+    const payload = buildLongFormRequest({ ...BASE_DRAFT, language: undefined }, 4, 400);
     expect(payload.context.language).toBe("en");
   });
 
   it("includes language='ua' when ua code is provided", () => {
-    const payload = buildStreamRequest({ values: BASE_VIBE, language: "ua" });
+    const payload = buildLongFormRequest({ ...BASE_DRAFT, language: "ua" }, 4, 400);
     expect(payload.context.language).toBe("ua");
   });
 });
 
 // ---------------------------------------------------------------------------
-// buildStreamRequest — default Ukrainian prompt when no userPrompt is given
+// buildLongFormRequest — default Ukrainian prompt when no userPrompt is given
 // ---------------------------------------------------------------------------
 
-describe("buildStreamRequest — default prompt content", () => {
+describe("buildLongFormRequest — default prompt content", () => {
   it("generates a Ukrainian default prompt when language='uk' and no userPrompt", () => {
-    const payload = buildStreamRequest({ values: BASE_VIBE, language: "uk" });
+    const payload = buildLongFormRequest({ ...BASE_DRAFT, language: "uk" }, 4, 400);
     // The default prompt for Ukrainian should contain Cyrillic characters
     expect(payload.context.user_prompt).toMatch(/[А-Яа-яІіЇїЄєҐґ]/);
   });
 
   it("generates an English default prompt when language='en' and no userPrompt", () => {
-    const payload = buildStreamRequest({ values: BASE_VIBE, language: "en" });
+    const payload = buildLongFormRequest({ ...BASE_DRAFT, language: "en" }, 4, 400);
     expect(payload.context.user_prompt).not.toMatch(/[А-Яа-яІіЇїЄєҐґ]/);
   });
 
   it("uses the provided userPrompt over the default prompt", () => {
     const custom = "Write a story about a storm.";
-    const payload = buildStreamRequest({ values: BASE_VIBE, language: "uk", userPrompt: custom });
+    const payload = buildLongFormRequest({ ...BASE_DRAFT, language: "uk", userPrompt: custom }, 4, 400);
     expect(payload.context.user_prompt).toBe(custom);
   });
 
   it("trims whitespace from userPrompt", () => {
-    const payload = buildStreamRequest({
-      values: BASE_VIBE,
+    const payload = buildLongFormRequest({
+      ...BASE_DRAFT,
       userPrompt: "  Custom prompt.  ",
-    });
+    }, 4, 400);
     expect(payload.context.user_prompt).toBe("Custom prompt.");
   });
 
   it("falls back to default prompt when userPrompt is only whitespace", () => {
-    const payload = buildStreamRequest({ values: BASE_VIBE, userPrompt: "   " });
+    const payload = buildLongFormRequest({ ...BASE_DRAFT, userPrompt: "   " }, 4, 400);
     expect(payload.context.user_prompt.length).toBeGreaterThan(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// buildStreamRequest — vibe values are forwarded correctly
+// buildLongFormRequest — vibe values are forwarded correctly
 // ---------------------------------------------------------------------------
 
-describe("buildStreamRequest — vibe forwarding", () => {
+describe("buildLongFormRequest — vibe forwarding", () => {
   it("maps camelCase readerRespect to snake_case reader_respect in payload", () => {
-    const payload = buildStreamRequest({ values: { aggression: 3, readerRespect: 8, morality: 4, sourceFidelity: 7 } });
+    const payload = buildLongFormRequest({ values: { aggression: 3, readerRespect: 8, morality: 4, sourceFidelity: 7 } }, 4, 400);
     expect(payload.vibe.reader_respect).toBe(8);
     expect(payload.vibe.aggression).toBe(3);
     expect(payload.vibe.morality).toBe(4);
@@ -86,23 +87,19 @@ describe("buildStreamRequest — vibe forwarding", () => {
 });
 
 // ---------------------------------------------------------------------------
-// buildStreamRequest — provider config
+// buildLongFormRequest — chapter settings
 // ---------------------------------------------------------------------------
 
-describe("buildStreamRequest — provider config", () => {
-  it("uses default provider config when none is supplied", () => {
-    const payload = buildStreamRequest({ values: BASE_VIBE });
-    expect(payload.provider.provider).toBe(DEFAULT_PROVIDER_CONFIG.provider);
-    expect(payload.provider.model).toBe(DEFAULT_PROVIDER_CONFIG.model);
+describe("buildLongFormRequest — chapter settings", () => {
+  it("forwards chapterCount and chapterWordTarget", () => {
+    const payload = buildLongFormRequest(BASE_DRAFT, 3, 300);
+    expect(payload.chapter_count).toBe(3);
+    expect(payload.chapter_word_target).toBe(300);
   });
 
-  it("uses the supplied provider config", () => {
-    const config = { provider: "anthropic", model: "claude-3-haiku-20240307", judgeModel: "claude-3-haiku-20240307", temperature: 0.5 };
-    const payload = buildStreamRequest({ values: BASE_VIBE }, config);
-    expect(payload.provider.provider).toBe("anthropic");
-    expect(payload.provider.model).toBe("claude-3-haiku-20240307");
-    expect(payload.provider.judge_model).toBe("claude-3-haiku-20240307");
-    expect(payload.provider.temperature).toBe(0.5);
+  it("always sets stream: true", () => {
+    const payload = buildLongFormRequest(BASE_DRAFT, 4, 400);
+    expect(payload.stream).toBe(true);
   });
 });
 
@@ -145,11 +142,10 @@ describe("parseSseChunk", () => {
 
   it("parses a log event frame with warning level", () => {
     const raw =
-      'event: log\ndata: {"from": "Judge", "to": "Orchestrator", "message": "Rejected — too terse", "level": "warning"}';
+      'event: log\ndata: {"from": "Orchestrator", "to": "LLM", "message": "Chapter write slow", "level": "warning"}';
     const frame = parseSseChunk(raw);
     expect(frame?.event).toBe("log");
     expect(frame?.payload.level).toBe("warning");
-    expect(frame?.payload.from).toBe("Judge");
   });
 
   it("parses a log event frame for outline agent", () => {

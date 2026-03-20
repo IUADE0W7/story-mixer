@@ -54,8 +54,6 @@ export interface LongFormRequestPayload {
   };
   chapter_count: number;
   chapter_word_target: number;
-  revision_limit: number;
-  enable_critic: boolean;
   stream: true;
 }
 
@@ -106,7 +104,6 @@ export const buildLongFormRequest = (
   draft: StoryDraftInput,
   chapterCount: number,
   chapterWordTarget: number,
-  enableCritic: boolean = true,
 ): LongFormRequestPayload => {
   const publicTitle = normalizeOptionalText(draft.publicTitle);
   const language    = draft.language ?? "en";
@@ -129,8 +126,6 @@ export const buildLongFormRequest = (
     },
     chapter_count:      chapterCount,
     chapter_word_target: chapterWordTarget,
-    revision_limit: 2,
-    enable_critic: enableCritic,
     stream: true,
   };
 };

@@ -15,7 +15,6 @@ export type StreamStatus =
   | { code: "connecting" }
   | { code: "outline_ready" }
   | { code: "writing_chapter"; chapter: number }
-  | { code: "revising_chapter"; chapter: number; attempt: number }
   | { code: "complete" }
   | { code: "error" }
   | { code: "backend"; message: string }
@@ -30,14 +29,12 @@ export interface AgentLogEntry {
   level: "info" | "warning" | "error";
 }
 
-export type ChapterStatus = "pending" | "generating" | "revising" | "complete";
+export type ChapterStatus = "pending" | "generating" | "complete";
 
 export interface ChapterState {
   outline: ChapterOutlineEntry;
   text: string;
   status: ChapterStatus;
-  revisionCount: number;
-  accepted: boolean;
   wordCount: number;
 }
 
@@ -45,7 +42,6 @@ interface GenerateLongFormArgs {
   draft: StoryDraftInput;
   chapterCount: number;
   chapterWordTarget: number;
-  enableCritic?: boolean;
   token?: string | null;
 }
 
@@ -84,7 +80,6 @@ export function useLongFormStream(): UseLongFormStreamResult {
     draft,
     chapterCount,
     chapterWordTarget,
-    enableCritic = true,
     token,
   }: GenerateLongFormArgs): Promise<void> => {
     abortRef.current?.abort();
@@ -102,7 +97,6 @@ export function useLongFormStream(): UseLongFormStreamResult {
       draft,
       chapterCount,
       chapterWordTarget,
-      enableCritic,
     );
 
     try {
@@ -169,12 +163,10 @@ export function useLongFormStream(): UseLongFormStreamResult {
               const entries = rawChapters as ChapterOutlineEntry[];
               setOutline(entries);
               setChapters(entries.map(o => ({
-                outline:       o,
-                text:          "",
-                status:        "pending",
-                revisionCount: 0,
-                accepted:      false,
-                wordCount:     0,
+                outline:   o,
+                text:      "",
+                status:    "pending",
+                wordCount: 0,
               })));
             }
             setStreamStatus({ code: "outline_ready" });
@@ -201,26 +193,13 @@ export function useLongFormStream(): UseLongFormStreamResult {
             }
           }
 
-          if (frame.event === "chapter_revision") {
-            const num     = typeof frame.payload.chapter === "number" ? frame.payload.chapter : currentChapterNum;
-            const attempt = typeof frame.payload.attempt === "number" ? frame.payload.attempt : 1;
-            setStreamStatus({ code: "revising_chapter", chapter: num, attempt });
-            setChapters(prev => prev.map(c =>
-              c.outline.number === num
-                ? { ...c, status: "revising", revisionCount: attempt, text: "" }
-                : c
-            ));
-          }
-
           if (frame.event === "chapter_complete") {
-            const num      = typeof frame.payload.number       === "number"  ? frame.payload.number       : currentChapterNum;
-            const content  = typeof frame.payload.content      === "string"  ? frame.payload.content      : "";
-            const accepted = typeof frame.payload.accepted      === "boolean" ? frame.payload.accepted      : true;
-            const revCount = typeof frame.payload.revision_count === "number" ? frame.payload.revision_count : 0;
-            const wc       = typeof frame.payload.word_count    === "number"  ? frame.payload.word_count    : 0;
+            const num     = typeof frame.payload.number    === "number" ? frame.payload.number    : currentChapterNum;
+            const content = typeof frame.payload.content   === "string" ? frame.payload.content   : "";
+            const wc      = typeof frame.payload.word_count === "number" ? frame.payload.word_count : 0;
             setChapters(prev => prev.map(c =>
               c.outline.number === num
-                ? { ...c, text: content, status: "complete", accepted, revisionCount: revCount, wordCount: wc }
+                ? { ...c, text: content, status: "complete", wordCount: wc }
                 : c
             ));
           }
@@ -237,8 +216,6 @@ export function useLongFormStream(): UseLongFormStreamResult {
               message: typeof frame.payload.message === "string" ? frame.payload.message : "",
               level: (frame.payload.level === "warning" || frame.payload.level === "error") ? frame.payload.level : "info",
             };
-            const logFn = entry.level === "warning" ? console.warn : entry.level === "error" ? console.error : console.log;
-            logFn(`[Agent] ${entry.from} → ${entry.to}: ${entry.message}`);
             setAgentLog((prev) => [...prev, entry]);
           }
 

@@ -78,7 +78,6 @@ class AppSettings(BaseSettings):
     # LLM provider selection — overrideable via environment variables
     llm_provider: str = "ollama"
     llm_model: str = "gpt-oss:20b"
-    llm_judge_model: str = "gpt-oss:20b"
     llm_temperature: float = Field(default=0.8, ge=0.0, le=2.0)
     # Logging level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     log_level: str = "INFO"

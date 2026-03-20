@@ -218,7 +218,7 @@ class VibeMetrics(BaseModel):
             case MetricBand.DOMINANT:
                 return (
                     "Make the narration forceful and high-pressure "
-                    "without becoming incoherent or abusive."
+                    "without becoming incoherent ."
                 )
             case _:
                 raise ValueError(f"Unhandled band: {band}")
@@ -248,8 +248,7 @@ class VibeMetrics(BaseModel):
         match band:
             case MetricBand.STRONGLY_MINIMIZED:
                 return (
-                    "Use an intentionally abrasive, dismissive stance "
-                    "only if the story context justifies it."
+                    "Use an intentionally abrasive, dismissive stance."
                 )
             case MetricBand.RESTRAINED:
                 return "Keep explanations sparse and avoid over-accommodating the reader."

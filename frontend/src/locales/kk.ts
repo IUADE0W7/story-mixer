@@ -46,9 +46,7 @@ const kk: typeof en = {
       wordsPerChapter: "Сөз/тар.",
       provider: "Провайдер",
       model: "Модель",
-      judgeModel: "Судья моделі",
       temperature: "Температура",
-      enableCritic: "Сыншы агентін қосу",
     },
     genres: {
       fantasy: "Фэнтези",
