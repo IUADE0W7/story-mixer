@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.domain.long_form_contracts import ChapterOutline, LongFormRequest
-from app.domain.vibe_models import VibeMetrics
+from app.domain.vibe_models import CalibrationProfile, VibeMetrics
 from app.services.long_form_orchestrator import _build_chapter_prompt
 
 
@@ -12,7 +12,7 @@ def _make_calibration(
     reader_respect: float = 0.7,
     morality: float = 0.9,
     source_fidelity: float = 0.5,
-):
+) -> CalibrationProfile:
     return VibeMetrics(
         aggression=aggression,
         reader_respect=reader_respect,
@@ -113,5 +113,5 @@ def test_chapter_no_language_instruction_when_unset() -> None:
         previous_summaries=[],
         calibration=_make_calibration(),
     )
-    assert "Ukrainian" not in envelope.system_prompt
-    assert "Ukrainian" not in envelope.user_prompt
+    assert "Output language requirement" not in envelope.system_prompt
+    assert "Output language requirement" not in envelope.user_prompt

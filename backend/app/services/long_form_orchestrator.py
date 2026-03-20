@@ -43,6 +43,11 @@ def _log(request_id: str, from_agent: str, to_agent: str, message: str, level: s
     return _evt(_EV_LOG, request_id, {"from": from_agent, "to": to_agent, "message": message, "level": level})
 
 
+def _band_for(directives: tuple, name: str) -> str:
+    """Look up the band value for a named metric from a directives tuple."""
+    return next(d.band for d in directives if d.metric_name == name)
+
+
 def _build_chapter_prompt(
     request: LongFormRequest,
     chapter: ChapterOutline,
@@ -85,8 +90,8 @@ def _build_chapter_prompt(
         + "\nWrite only the chapter body — no headers, no preamble."
     )
 
-    aggression_band = calibration.directives[0].band   # index 0 = aggression
-    morality_band = calibration.directives[2].band     # index 2 = morality
+    aggression_band = _band_for(calibration.directives, "aggression")
+    morality_band = _band_for(calibration.directives, "morality")
 
     continuity_block = (
         "Previous chapters (for continuity):\n"
