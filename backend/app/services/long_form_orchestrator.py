@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
@@ -59,6 +60,16 @@ def _build_chapter_prompt(
         lang_instruction = (
             "Output language requirement: Ukrainian only (Cyrillic). "
             "Do not switch to English.\n\n"
+        )
+    elif lang in ("ru", "rus", "russian"):
+        lang_instruction = (
+            "Output language requirement: Russian only (Cyrillic). "
+            "Do not switch to English.\n\n"
+        )
+    elif lang in ("kk", "kaz", "kazakh"):
+        lang_instruction = (
+            "Output language requirement: Kazakh only (Cyrillic script). "
+            "Do not switch to English or Russian.\n\n"
         )
     elif lang.startswith("en"):
         lang_instruction = "Output language requirement: English only.\n\n"
@@ -128,6 +139,13 @@ class LongFormOrchestrator:
         request_id  = str(uuid4())
         calibration = request.calibration_profile()
 
+        _pipeline_start = time.time()
+        logger.info(
+            "Pipeline started: chapters=%d critic=%s",
+            request.chapter_count,
+            request.enable_critic,
+        )
+
         directive_lines = "\n".join(
             f"- {d.metric_name}: {d.instruction}" for d in calibration.directives
         )
@@ -157,6 +175,8 @@ class LongFormOrchestrator:
         previous_summaries: list[str] = []
 
         for chapter_outline in outline:
+            _chapter_start = time.time()
+
             yield _evt(_EV_STATUS, request_id, {
                 "message": f"writing_chapter_{chapter_outline.number}",
             })
@@ -188,7 +208,6 @@ class LongFormOrchestrator:
                 try:
                     async for chunk in self._llm_gateway.stream_text(
                         prompt=chapter_prompt,
-                        provider=request.provider,
                     ):
                         chunks.append(chunk.text)
                         yield _evt(_EV_CHAPTER_TOKEN, request_id, {
@@ -206,9 +225,18 @@ class LongFormOrchestrator:
                     return
 
                 draft_text = "".join(chunks).strip()
-                yield _log(request_id, "LLM", "Orchestrator", f"Chapter {chapter_outline.number} draft received ({len(draft_text)} chars)")
+                yield _log(
+                    request_id, "LLM", "Orchestrator",
+                    f"Chapter {chapter_outline.number} draft received "
+                    f"({len(draft_text)} chars, {time.time() - _chapter_start:.1f}s)"
+                )
 
-                # Critic evaluation
+                # Critic evaluation (skipped when enable_critic is False)
+                if not request.enable_critic:
+                    logger.info("Critic disabled — accepting chapter %d as-is", chapter_outline.number)
+                    yield _log(request_id, "Orchestrator", "Critic", f"Critic disabled — accepting chapter {chapter_outline.number} as-is")
+                    break
+
                 yield _log(request_id, "Orchestrator", "Critic", f"Evaluating chapter {chapter_outline.number} quality")
                 try:
                     critic_result = await self._critic_agent.evaluate_chapter(
@@ -231,7 +259,14 @@ class LongFormOrchestrator:
                 )
 
                 # Chief redactor decision
-                if critic_result.passed or revision_count >= request.revision_limit:
+                if critic_result.passed:
+                    break
+                if revision_count >= request.revision_limit:
+                    logger.warning(
+                        "Max revisions reached for chapter %d (limit=%d), accepting current draft",
+                        chapter_outline.number,
+                        request.revision_limit,
+                    )
                     break
 
                 revision_count += 1
@@ -279,6 +314,12 @@ class LongFormOrchestrator:
             normalized_vibe=calibration.metrics,
             total_words=total_words,
             full_text=full_text,
+        )
+
+        logger.info(
+            "Pipeline complete: %d chapters in %.1fs",
+            len(completed),
+            time.time() - _pipeline_start,
         )
 
         yield _evt(_EV_COMPLETE, request_id, result.model_dump(mode="json"))
