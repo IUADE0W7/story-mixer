@@ -1,0 +1,277 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,600&family=JetBrains+Mono:wght@300;400;500;600&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&family=Noto+Sans:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --radius: 0.375rem;
+
+  /* ══ Laboratory Surface System ══════════════════════════════════════════════
+     Cool blue-grey depth scale — mimics a high-contrast instrument display.   */
+  --ink:            #0B0E14;  /* primary canvas       — deep space             */
+  --surface:        #0F131A;  /* panel base                                     */
+  --surface-raised: #141921;  /* section cards                                  */
+  --surface-high:   #1A2133;  /* inputs, elevated controls, dropdowns           */
+  --border:         #1E2A3A;  /* structural dividers                             */
+  --border-bright:  #2A3A52;  /* visible accent borders                          */
+
+  /* ══ Typography Scale ════════════════════════════════════════════════════════
+     Contrast ratios against #0B0E14 — all pairings verified WCAG AA/AAA.      */
+  --cream:       #F8FAFC;     /* primary headings         — 19.1 : 1  (AAA)     */
+  --cream-muted: #94A3B8;     /* instructional body text  —  7.5 : 1  (AAA)     */
+  --cream-faint: #64748B;     /* UI chrome / decorative   —  4.1 : 1  (AA-UI)   */
+
+  /* ══ Primary Accent — Teal ═══════════════════════════════════════════════════
+     All primary actions, navigation focus, streaming indicators — 7.6 : 1 AAA  */
+  --teal:      #14B8A6;
+  --teal-dim:  #0D3D38;
+  --teal-glow: rgba(20, 184, 166, 0.14);
+
+  /* ══ Secondary Accent — Amber ════════════════════════════════════════════════
+     Calibration gauges, technical controls, industrial forge aesthetic — 8.5:1  */
+  --amber:      #F59E0B;
+  --amber-dim:  #451A03;
+  --amber-glow: rgba(245, 158, 11, 0.14);
+
+  /* ══ Semantic: Destructive / Error ═══════════════════════════════════════════
+     Visually distinct from teal primary — red hue separation — 5.0 : 1 AA      */
+  --rose:      #EF4444;
+  --rose-dim:  #4C0519;
+  --rose-glow: rgba(239, 68, 68, 0.14);
+
+  /* ══ Semantic: Success ═══════════════════════════════════════════════════════
+     Green hue shift separates from teal — chapter acceptance, completion — 8:1  */
+  --emerald:      #22C55E;
+  --emerald-dim:  #052E16;
+  --emerald-glow: rgba(34, 197, 94, 0.14);
+
+  /* ══ Tertiary Accent — Violet ════════════════════════════════════════════════
+     Multi-axis morality data, alternate channels — 7.0 : 1 AAA                 */
+  --violet:      #A78BFA;
+  --violet-dim:  #2E1065;
+  --violet-glow: rgba(167, 139, 250, 0.14);
+
+  /* ══ Fonts ═══════════════════════════════════════════════════════════════════ */
+  --font-display: 'Cormorant Garamond', 'Noto Sans', Georgia, serif;
+  --font-mono:    'JetBrains Mono', 'Noto Sans', 'Courier New', monospace;
+  --font-serif:   'Merriweather', 'Noto Sans', Georgia, serif;
+}
+
+/* ══ Base Reset ══════════════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { background-color: var(--ink); }
+
+body {
+  background-color: var(--ink);
+  color: var(--cream);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Grain overlay — atmospheric noise for physical depth ── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9998;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  opacity: 0.7;
+}
+
+/* ── Horizontal scanlines — CRT / digital lab terminal feel ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9997;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    rgba(0, 0, 0, 0.018) 3px,
+    rgba(0, 0, 0, 0.018) 4px
+  );
+}
+
+/* ══ Animations ══════════════════════════════════════════════════════════════ */
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+@keyframes slowSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes glowPulse {
+  0%, 100% { opacity: 0.5; }
+  50%       { opacity: 1;   }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+/* ══ Entrance animations ══════════════════════════════════════════════════════ */
+.lf-entrance-0 { animation: fadeSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.00s both; }
+.lf-entrance-1 { animation: fadeSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both; }
+.lf-entrance-2 { animation: fadeSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.16s both; }
+.lf-entrance-3 { animation: fadeSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.24s both; }
+.lf-entrance-4 { animation: fadeSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.32s both; }
+.lf-entrance-5 { animation: fadeSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.40s both; }
+
+/* ══ Streaming cursor ════════════════════════════════════════════════════════ */
+.lf-streaming::after {
+  content: '▌';
+  display: inline-block;
+  animation: cursorBlink 0.9s step-start infinite;
+  color: var(--teal);
+  margin-left: 2px;
+  font-size: 0.9em;
+}
+
+/* ══ Loading shimmer ═════════════════════════════════════════════════════════ */
+.lf-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--surface-raised) 25%,
+    var(--surface-high)   50%,
+    var(--surface-raised) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease infinite;
+}
+
+/* ══ Custom scrollbar ════════════════════════════════════════════════════════ */
+::-webkit-scrollbar              { width: 3px; height: 3px; }
+::-webkit-scrollbar-track        { background: var(--surface); }
+::-webkit-scrollbar-thumb        { background: var(--border-bright); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover  { background: var(--cream-faint); }
+
+/* ══ Radix Select override ═══════════════════════════════════════════════════ */
+[data-radix-select-viewport] { background: var(--surface-raised) !important; }
+
+/* ══ Laboratory panel depth ══════════════════════════════════════════════════
+   Subtle inner top-edge teal highlight reads as a lit instrument bezel.
+   Add .lf-panel alongside any rounded card that uses --surface-raised.      */
+.lf-panel {
+  box-shadow:
+    inset 0 1px 0 rgba(20, 184, 166, 0.07),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
+    0 4px 24px rgba(0, 0, 0, 0.45),
+    0 1px 4px  rgba(0, 0, 0, 0.3);
+}
+
+/* ══ Typography ══════════════════════════════════════════════════════════════ */
+
+/* Story manuscript body.
+ * Used by: narrative output article, story-brief textarea.
+ * Note: the textarea overrides font-size/line-height inline — changes here
+ * only affect the narrative output panel unless those overrides are removed. */
+.lf-manuscript {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 32px;
+  letter-spacing: 0;
+  color: var(--cream);
+}
+
+/* Display headings — Cormorant Garamond */
+.lf-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* Section label — monospace allcaps, used as region identifiers */
+.lf-section-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--cream-faint);
+}
+
+/* Horizontal divider */
+.lf-divider {
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--border), transparent);
+}
+
+/* ══ Mixer knob badge ════════════════════════════════════════════════════════ */
+.lf-knob-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 2px solid;
+  background: var(--surface);
+  transition: box-shadow 0.2s ease;
+}
+
+/* ══ Forge Narrative button ═══════════════════════════════════════════════════ */
+@keyframes forgePulse {
+  0%, 100% {
+    box-shadow:
+      0 0 18px rgba(20, 184, 166, 0.35),
+      0 4px 32px rgba(20, 184, 166, 0.18);
+  }
+  50% {
+    box-shadow:
+      0 0 38px rgba(20, 184, 166, 0.65),
+      0 4px 52px rgba(20, 184, 166, 0.30);
+  }
+}
+
+.lf-forge-btn {
+  padding: 14px 48px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background: var(--surface-raised);
+  color: var(--cream-faint);
+  border: 1px solid var(--border);
+  min-width: 280px;
+}
+
+.lf-forge-btn--active {
+  background: linear-gradient(135deg, var(--teal-dim) 0%, var(--teal) 100%);
+  color: #0B0E14;
+  border: 1px solid var(--teal);
+  animation: forgePulse 2.4s ease-in-out infinite;
+}
+
+.lf-forge-btn--active:hover {
+  background: linear-gradient(135deg, var(--teal) 0%, #2DD4BF 100%);
+  animation: none;
+  box-shadow:
+    0 0 52px rgba(20, 184, 166, 0.8),
+    0 8px 40px rgba(20, 184, 166, 0.4);
+  transform: translateY(-1px);
+}
+
+.lf-forge-btn--active:active {
+  transform: translateY(0);
+  animation: none;
+  box-shadow: 0 0 24px rgba(20, 184, 166, 0.5);
+}

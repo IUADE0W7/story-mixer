@@ -1,0 +1,37 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+
+# Environment / secrets
+backend/.env
+.env
+*.env.local
+
+# Claude Code — local-only overrides (never commit)
+.claude/settings.local.json
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+
+# DB
+*.sqlite
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git worktrees
+.worktrees/

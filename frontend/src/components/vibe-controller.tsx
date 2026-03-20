@@ -1,0 +1,892 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import type { SliderVariant } from "@/components/ui/slider";
+import { Textarea } from "@/components/ui/textarea";
+import { useLanguage } from "@/lib/language-context";
+import type { TranslationKey } from "@/locales/index";
+import {
+  bandForNormalizedValue,
+  type MetricBand,
+  normalizeSliderValue,
+  type VibeMetricName,
+  type VibeValues,
+} from "@/lib/vibe-bands";
+import {
+  buildPreviewTitle,
+  GENRE_OPTIONS,
+} from "@/lib/story-streaming";
+import { AuthModal } from "@/components/auth-modal";
+import { useLongFormStream, type ChapterState, type StreamStatus } from "@/components/use-long-form-stream";
+import { AgentInteractionLog } from "@/components/agent-interaction-log";
+import { downloadStoryAsPdf } from "@/lib/story-pdf";
+
+interface VibeControllerProps {
+  values: VibeValues;
+  onChange: (next: VibeValues) => void;
+  token: string | null;
+  onTokenChange: (token: string | null) => void;
+}
+
+interface SliderDefinition {
+  key: VibeMetricName;
+  labelKey: TranslationKey;
+  descriptionKey: TranslationKey;
+  variant: SliderVariant;
+  accentColor: string;
+  accentGlow: string;
+  accentBg: string;
+}
+
+/* ── Genre → flavor locale key map ── */
+const GENRE_TO_FLAVOR_KEY: Record<string, string> = {
+  "Noir":               "noir",
+  "Horror":             "horror",
+  "Thriller":           "thriller",
+  "Fantasy":            "fantasy",
+  "Science Fiction":    "scienceFiction",
+  "Romance":            "romance",
+  "Historical Fiction": "historicalFiction",
+  "Fairy Tale":         "fairyTale",
+  "Mystery":            "mystery",
+  "Adventure":          "adventure",
+  "Mythology":          "mythology",
+  "Speculative Fiction":"speculativeFiction",
+};
+
+/* ── Seed tags ── */
+type SeedTag = {
+  labelKey: TranslationKey;
+  seedKey: TranslationKey;
+};
+
+const SEED_TAGS: SeedTag[] = [
+  { labelKey: "vibe.seeds.loneWanderer",    seedKey: "vibe.seeds.loneWandererSeed" },
+  { labelKey: "vibe.seeds.darkProphecy",    seedKey: "vibe.seeds.darkProphecySeed" },
+  { labelKey: "vibe.seeds.hiddenMonster",   seedKey: "vibe.seeds.hiddenMonsterSeed" },
+  { labelKey: "vibe.seeds.unlikelyAllies",  seedKey: "vibe.seeds.unlikelyAlliesSeed" },
+  { labelKey: "vibe.seeds.forbiddenArchive",seedKey: "vibe.seeds.forbiddenArchiveSeed" },
+  { labelKey: "vibe.seeds.lastBloodline",   seedKey: "vibe.seeds.lastBloodlineSeed" },
+  { labelKey: "vibe.seeds.theBetrayal",     seedKey: "vibe.seeds.theBetraySeed" },
+  { labelKey: "vibe.seeds.shatteredCity",   seedKey: "vibe.seeds.shatteredCitySeed" },
+];
+
+const sliderDefinitions: SliderDefinition[] = [
+  {
+    key: "aggression",
+    labelKey: "vibe.sliders.aggression.label",
+    descriptionKey: "vibe.sliders.aggression.description",
+    variant: "rose",
+    accentColor: "#EF4444",
+    accentGlow: "rgba(239,68,68,0.12)",
+    accentBg: "rgba(127,29,29,0.12)",
+  },
+  {
+    key: "readerRespect",
+    labelKey: "vibe.sliders.readerRespect.label",
+    descriptionKey: "vibe.sliders.readerRespect.description",
+    variant: "teal",
+    accentColor: "#14B8A6",
+    accentGlow: "rgba(20,184,166,0.12)",
+    accentBg: "rgba(13,61,56,0.12)",
+  },
+  {
+    key: "morality",
+    labelKey: "vibe.sliders.morality.label",
+    descriptionKey: "vibe.sliders.morality.description",
+    variant: "violet",
+    accentColor: "#A78BFA",
+    accentGlow: "rgba(167,139,250,0.12)",
+    accentBg: "rgba(46,16,101,0.12)",
+  },
+  {
+    key: "sourceFidelity",
+    labelKey: "vibe.sliders.sourceFidelity.label",
+    descriptionKey: "vibe.sliders.sourceFidelity.description",
+    variant: "amber",
+    accentColor: "#F59E0B",
+    accentGlow: "rgba(245,158,11,0.12)",
+    accentBg: "rgba(69,26,3,0.12)",
+  },
+];
+
+/* ── Tone label computation ── */
+const buildToneLabel = (
+  values: VibeValues,
+  genre: string,
+  t: (key: TranslationKey) => string
+): string => {
+  const aggBand = bandForNormalizedValue(normalizeSliderValue(values.aggression));
+  const morBand = bandForNormalizedValue(normalizeSliderValue(values.morality));
+  const aggrAdj = t(`vibe.tones.aggressionAdjective.${aggBand}` as TranslationKey);
+  const morMod  = t(`vibe.tones.moralityModifier.${morBand}` as TranslationKey);
+  const flavorKey = genre ? GENRE_TO_FLAVOR_KEY[genre] : null;
+  const genreFlav = flavorKey ? t(`vibe.tones.genreFlavor.${flavorKey}` as TranslationKey) : "";
+  const genreName = genre || t("vibe.briefing.narrativeFallback");
+  return [aggrAdj, morMod, genreFlav, genreName].filter(Boolean).join(" ");
+};
+
+/* ── Shared input style ── */
+const inputStyle = {
+  background: "var(--surface-high)",
+  border: "1px solid var(--border-bright)",
+  color: "var(--cream)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "12px",
+} as React.CSSProperties;
+
+const selectContentStyle = {
+  background: "var(--surface-raised)",
+  border: "1px solid var(--border-bright)",
+  color: "var(--cream)",
+} as React.CSSProperties;
+
+/* ── Section wrapper ── */
+function Section({
+  id, label, description, children, className = "", entranceClass = "",
+}: {
+  id: string;
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+  className?: string;
+  entranceClass?: string;
+}) {
+  return (
+    <section
+      role="region"
+      aria-labelledby={id}
+      className={`rounded-xl p-5 lf-panel ${entranceClass} ${className}`}
+      style={{
+        background: "var(--surface-raised)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <header className="mb-4">
+        <h3 id={id} className="lf-section-label" style={{ color: "var(--teal)" }}>
+          {label}
+        </h3>
+        {description && (
+          <p className="mt-1 text-xs" style={{ color: "var(--cream-muted)", fontFamily: "var(--font-mono)" }}>
+            {description}
+          </p>
+        )}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+/* ── VU Meter Segments ── */
+function VuMeter({ value, accentColor, max = 10 }: { value: number; accentColor: string; max?: number }) {
+  return (
+    <div className="flex gap-0.5" role="presentation" aria-hidden>
+      {Array.from({ length: max }, (_, i) => i + 1).map((seg) => {
+        const active = seg <= value;
+        const isHot  = active && seg >= value;
+        return (
+          <div
+            key={seg}
+            className="flex-1 rounded-sm transition-all duration-150"
+            style={{
+              height: "6px",
+              background: active ? accentColor : "var(--surface-high)",
+              opacity: active ? Math.min(1, 0.45 + seg * 0.055) : 0.22,
+              boxShadow: isHot ? `0 0 5px ${accentColor}` : "none",
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── Mixer Channel (slider with VU meter + tooltip) ── */
+function MixerChannel({
+  def,
+  rawValue,
+  onUpdate,
+  t,
+}: {
+  def: SliderDefinition;
+  rawValue: number;
+  onUpdate: (v: number) => void;
+  t: (key: TranslationKey) => string;
+}) {
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const normalized     = normalizeSliderValue(rawValue);
+  const band           = bandForNormalizedValue(normalized);
+  const toneLabel      = t(`vibe.tones.channelLabel.${def.key}.${band}` as TranslationKey);
+  const bandLabel      = t(`vibe.bands.${band}` as TranslationKey);
+  const intensityLabel = t(`vibe.intensity.${band}` as TranslationKey);
+  const label          = t(def.labelKey);
+  const description    = t(def.descriptionKey);
+
+  return (
+    <div
+      className="rounded-lg p-4 space-y-2.5 transition-shadow duration-300"
+      style={{
+        border: `1px solid ${def.accentColor}35`,
+        background: def.accentBg,
+      }}
+      aria-label={`${label} control strip`}
+    >
+      {/* Header row */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-sm font-medium leading-none truncate" style={{ fontFamily: "var(--font-mono)", color: def.accentColor }}>
+            {label}
+          </p>
+          <p className="text-xs mt-1 line-clamp-2" style={{ color: "var(--cream-faint)", fontFamily: "var(--font-mono)" }}>
+            {description}
+          </p>
+        </div>
+        {/* Illuminated value knob */}
+        <div
+          className="relative shrink-0 flex flex-col items-center"
+          onMouseEnter={() => setTooltipVisible(true)}
+          onMouseLeave={() => setTooltipVisible(false)}
+        >
+          <div
+            className="lf-knob-badge"
+            style={{
+              borderColor: def.accentColor,
+              boxShadow: `0 0 10px ${def.accentGlow}, inset 0 0 6px ${def.accentBg}`,
+            }}
+          >
+            <span
+              className="text-xl font-medium tabular-nums leading-none"
+              style={{ fontFamily: "var(--font-mono)", color: def.accentColor }}
+            >
+              {rawValue}
+            </span>
+            <span className="text-xs leading-none" style={{ color: "var(--cream-faint)", fontFamily: "var(--font-mono)" }}>
+              /10
+            </span>
+          </div>
+          {/* Tooltip */}
+          {tooltipVisible && (
+            <div
+              className="absolute -top-9 right-0 z-10 px-2.5 py-1 rounded whitespace-nowrap"
+              style={{
+                background: "var(--surface-high)",
+                border: `1px solid ${def.accentColor}60`,
+                color: def.accentColor,
+                fontFamily: "var(--font-mono)",
+                fontSize: "10px",
+                letterSpacing: "0.1em",
+                boxShadow: `0 0 12px ${def.accentGlow}`,
+              }}
+              role="tooltip"
+            >
+              {toneLabel.toUpperCase()}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* VU meter */}
+      <VuMeter value={rawValue} accentColor={def.accentColor} />
+
+      {/* Slider */}
+      <Slider
+        id={`vibe-${def.key}`}
+        variant={def.variant}
+        min={1}
+        max={10}
+        step={1}
+        value={[rawValue]}
+        onValueChange={(v) => onUpdate(v[0] ?? rawValue)}
+        aria-label={`${label} slider`}
+        aria-valuemin={1}
+        aria-valuemax={10}
+        aria-valuenow={rawValue}
+        aria-valuetext={`${label} ${rawValue} out of 10, ${intensityLabel} intensity`}
+        className="py-1"
+      />
+
+      {/* Footer row */}
+      <div className="flex items-center justify-end min-w-0">
+        <span
+          className="text-xs truncate text-right"
+          style={{ color: def.accentColor, fontFamily: "var(--font-mono)", opacity: 0.85 }}
+        >
+          {bandLabel} · {toneLabel}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function formatStreamStatus(status: StreamStatus, t: (key: import("@/locales/index").TranslationKey) => string): string {
+  switch (status.code) {
+    case "ready":            return t("vibe.status.streamReady");
+    case "connecting":       return t("vibe.status.streamConnecting");
+    case "outline_ready":    return t("vibe.status.streamOutlineReady");
+    case "writing_chapter":  return `${t("vibe.status.streamWritingChapter")} ${status.chapter}`;
+    case "complete":         return t("vibe.status.streamComplete");
+    case "error":            return t("vibe.status.streamError");
+    case "backend":          return status.message;
+    case "rate_limited":     return t("vibe.status.streamRateLimited");
+    case "unauthenticated":  return t("vibe.status.streamUnauthenticated");
+  }
+}
+
+export function VibeController({
+  values,
+  onChange,
+  token,
+  onTokenChange,
+}: VibeControllerProps) {
+  const { lang, setLang, t } = useLanguage();
+  const [sourceTaleA, setSourceTaleA]     = useState<string>("");
+  const [sourceTaleB, setSourceTaleB]     = useState<string>("");
+  const [userPrompt, setUserPrompt]       = useState<string>("");
+  const [genre, setGenre]                 = useState<string>(GENRE_OPTIONS[0] ?? "");
+  const [chapterCount, setChapterCount]   = useState(4);
+  const [chapterWords, setChapterWords]   = useState(400);
+  const [langBannerDismissed, setLangBannerDismissed] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  /* Derived title from two source tales */
+  const combinedTitle = [sourceTaleA.trim(), sourceTaleB.trim()].filter(Boolean).join(" × ");
+  const normalizedUserPrompt  = userPrompt.trim();
+
+  /* Language detection */
+  const hasCyrillic   = /[\u0400-\u04FF]/.test(userPrompt);
+  const showLangBanner = hasCyrillic && lang === "en" && !langBannerDismissed && userPrompt.length > 8;
+
+  /* Tone label */
+  const toneLabel = useMemo(() => buildToneLabel(values, genre, t), [values, genre, t]);
+
+  const {
+    outline,
+    chapters: longFormChapters,
+    streamStatus: lfStatus,
+    isStreaming: lfIsStreaming,
+    streamError: lfError,
+    agentLog: lfAgentLog,
+    generateLongForm,
+    reset: resetLongForm,
+  } = useLongFormStream();
+
+  useEffect(() => {
+    if (lfStatus.code === "unauthenticated") {
+      onTokenChange(null);
+    }
+  }, [lfStatus.code, onTokenChange]);
+
+  const previewTitle  = useMemo(() => buildPreviewTitle(values, combinedTitle), [values, combinedTitle]);
+
+  const updateValue = (metric: VibeMetricName, next: number) => {
+    onChange({ ...values, [metric]: Math.max(1, Math.min(10, Math.round(next))) });
+  };
+
+  const handleSeedTag = (seed: string) => {
+    setUserPrompt((p) => (p.trim() ? `${p.trim()}\n\n${seed}` : seed));
+  };
+
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  const handleGenerate = async () => {
+    const missing: string[] = [];
+    if (!sourceTaleA.trim()) missing.push(t("vibe.validation.originalStoryA"));
+    if (!sourceTaleB.trim()) missing.push(t("vibe.validation.originalStoryB"));
+    if (missing.length > 0) {
+      setValidationError(`${t("vibe.validation.pleaseFillIn")} ${missing.join(", ")}`);
+      return;
+    }
+    setValidationError(null);
+    resetLongForm();
+    await generateLongForm({
+      draft: {
+        values,
+        publicTitle: combinedTitle,
+        userPrompt: normalizedUserPrompt,
+        language: lang,
+        genre,
+      },
+      chapterCount,
+      chapterWordTarget: chapterWords,
+      token,
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      {!token && (
+        <AuthModal onAuthenticated={(newToken) => onTokenChange(newToken)} />
+      )}
+
+      {/* ── Unified grid: top row + bottom row share the same 3-col tracks ── */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+
+      {/* ── Story Setup (merged Briefing + Provider) ── */}
+      <Section
+        id="brief-heading"
+        label={t("vibe.briefing.sectionLabel")}
+        description={t("vibe.briefing.description")}
+        entranceClass="lf-entrance-1"
+        className="xl:col-span-3"
+      >
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_2fr]">
+
+          {/* ── ORIGIN: source tales + genre + settings ── */}
+          <div className="space-y-3">
+
+            {/* Source tales — side by side on the same row */}
+            <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="source-tale-a" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                  {t("vibe.briefing.sourceTaleA")}
+                </Label>
+                <Input
+                  id="source-tale-a"
+                  value={sourceTaleA}
+                  onChange={(e) => { setSourceTaleA(e.target.value); setValidationError(null); }}
+                  placeholder={t("vibe.placeholders.sourceTaleA")}
+                  aria-label="First source tale"
+                  style={inputStyle}
+                  className="border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6]"
+                />
+              </div>
+              <div className="flex items-center" style={{ paddingBottom: "9px" }}>
+                <span className="lf-section-label" style={{ color: "var(--teal)", fontSize: "13px" }}>×</span>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="source-tale-b" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                  {t("vibe.briefing.sourceTaleB")}
+                </Label>
+                <Input
+                  id="source-tale-b"
+                  value={sourceTaleB}
+                  onChange={(e) => { setSourceTaleB(e.target.value); setValidationError(null); }}
+                  placeholder={t("vibe.placeholders.sourceTaleB")}
+                  aria-label="Second source tale"
+                  style={inputStyle}
+                  className="border-0 focus-visible:ring-1 focus-visible:ring-[#F59E0B]"
+                />
+              </div>
+            </div>
+
+            {combinedTitle && (
+              <div
+                className="flex items-center gap-2 px-3 py-2 rounded-lg"
+                style={{ background: "var(--teal-glow)", border: "1px solid rgba(20,184,166,0.18)" }}
+              >
+                <span className="lf-section-label" style={{ color: "var(--teal)" }}>MIX</span>
+                <span className="text-sm truncate" style={{ color: "var(--cream)", fontFamily: "var(--font-display)", fontStyle: "italic" }}>
+                  {combinedTitle}
+                </span>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="genre-select" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                {t("vibe.fields.genre")}
+              </Label>
+              <Select value={genre} onValueChange={(v) => { setGenre(v); setValidationError(null); }}>
+                <SelectTrigger
+                  id="genre-select"
+                  className="w-full border-0 focus:ring-1 focus:ring-[#14B8A6]"
+                  style={inputStyle}
+                  aria-label="Select story genre"
+                >
+                  <SelectValue placeholder={t("vibe.placeholders.selectGenre")} />
+                </SelectTrigger>
+                <SelectContent style={selectContentStyle}>
+                  {GENRE_OPTIONS.map((g) => (
+                    <SelectItem key={g} value={g} className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">
+                      {t(`vibe.genres.${GENRE_TO_FLAVOR_KEY[g]}` as TranslationKey)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div
+              className="rounded-lg px-3 py-2.5 space-y-0.5"
+              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
+              aria-live="polite"
+              aria-label="Narrative tone preview"
+            >
+              <p className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                {t("vibe.briefing.narrativeTone")}
+              </p>
+              <p className="lf-display leading-tight" style={{ fontSize: "0.9rem", color: "var(--cream)" }}>
+                {toneLabel}
+              </p>
+            </div>
+
+            {/* Chapter settings */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="chapter-count" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                  {t("vibe.fields.chapters")}
+                </Label>
+                <Input
+                  id="chapter-count"
+                  type="number"
+                  min={2}
+                  max={4}
+                  step={1}
+                  value={chapterCount}
+                  onChange={(e) => setChapterCount(Math.max(2, Math.min(4, Number(e.target.value))))}
+                  style={inputStyle}
+                  className="w-full border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] text-center"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="chapter-words" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                  {t("vibe.fields.wordsPerChapter")}
+                </Label>
+                <Input
+                  id="chapter-words"
+                  type="number"
+                  min={100}
+                  max={500}
+                  step={100}
+                  value={chapterWords}
+                  onChange={(e) => setChapterWords(Math.max(100, Math.min(500, Number(e.target.value))))}
+                  style={inputStyle}
+                  className="w-full border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] text-center"
+                />
+              </div>
+            </div>
+
+          </div>
+
+          {/* ── BRIEF: seed tags + textarea + banner ── */}
+          <div className="space-y-2">
+            <Label htmlFor="story-brief-input" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+              {t("vibe.brief.sectionLabel")}
+            </Label>
+
+            <div className="flex flex-wrap gap-1.5 pb-1" role="group" aria-label="Story seed suggestions">
+              {SEED_TAGS.map((tag) => (
+                <button
+                  key={tag.labelKey}
+                  type="button"
+                  onClick={() => handleSeedTag(t(tag.seedKey))}
+                  className="px-2 py-0.5 rounded transition-all duration-150 hover:border-[var(--teal)] hover:text-[var(--teal)] active:scale-95"
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "10px",
+                    letterSpacing: "0.08em",
+                    color: "var(--cream-faint)",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border-bright)",
+                  }}
+                  aria-label={`Add seed: ${t(tag.labelKey)}`}
+                >
+                  + {t(tag.labelKey)}
+                </button>
+              ))}
+            </div>
+
+            <Textarea
+              id="story-brief-input"
+              value={userPrompt}
+              onChange={(e) => {
+                setUserPrompt(e.target.value);
+                setLangBannerDismissed(false);
+              }}
+              placeholder={t("vibe.brief.placeholder")}
+              aria-label="Custom story brief"
+              className="min-h-36 border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] resize-none lf-manuscript"
+              style={{ ...inputStyle, fontSize: "13px", lineHeight: "1.7" }}
+            />
+
+            {showLangBanner && (
+              <div
+                className="flex items-center justify-between gap-3 rounded-lg px-3 py-2"
+                style={{ background: "rgba(20,184,166,0.07)", border: "1px solid rgba(20,184,166,0.25)" }}
+                role="alert"
+              >
+                <p className="text-xs" style={{ color: "var(--teal)", fontFamily: "var(--font-mono)" }}>
+                  {t("vibe.language.cyrillicDetected")}
+                </p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => { setLang("uk"); setLangBannerDismissed(true); }}
+                    className="px-2 py-0.5 rounded text-xs transition-colors"
+                    style={{ fontFamily: "var(--font-mono)", background: "var(--teal)", color: "#0B0E14", fontSize: "10px", letterSpacing: "0.1em" }}
+                  >
+                    {t("vibe.buttons.switch")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLangBannerDismissed(true)}
+                    className="px-2 py-0.5 rounded text-xs transition-colors"
+                    style={{ fontFamily: "var(--font-mono)", color: "var(--cream-faint)", fontSize: "10px", letterSpacing: "0.1em", border: "1px solid var(--border)" }}
+                  >
+                    {t("vibe.buttons.dismiss")}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+
+        </div>
+      </Section>
+
+
+        {/* ── Channel Calibration (Mixing Board) ── */}
+        <Section
+          id="calibration-heading"
+          label={t("vibe.channels.sectionLabel")}
+          description={t("vibe.channels.description")}
+          entranceClass="lf-entrance-2"
+        >
+          <div className="space-y-3">
+            {sliderDefinitions.map((def) => (
+              <MixerChannel
+                key={def.key}
+                def={def}
+                rawValue={values[def.key]}
+                onUpdate={(v) => updateValue(def.key, v)}
+                t={t}
+              />
+            ))}
+          </div>
+        </Section>
+
+        {/* ── Long-form Progress ── */}
+        <Section
+            id="preview-heading"
+            label={t("vibe.progress.sectionLabel")}
+            entranceClass="lf-entrance-3"
+            className="flex flex-col"
+          >
+            <div className="flex items-center justify-between mb-3 -mt-1">
+              <span className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                {chapterCount} {t("vibe.progress.chaptersUnit")} · {chapterWords} {t("vibe.progress.wordsEachUnit")}
+              </span>
+              <span
+                className="text-xs px-2 py-0.5 rounded-full"
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  background: lfIsStreaming ? "var(--teal-glow)" : "var(--surface-high)",
+                  color: lfIsStreaming ? "var(--teal)" : "var(--cream-faint)",
+                  border: `1px solid ${lfIsStreaming ? "var(--teal)" : "var(--border)"}`,
+                  transition: "all 0.3s ease",
+                }}
+              >
+                {formatStreamStatus(lfStatus, t)}
+              </span>
+            </div>
+
+            <div className="flex-1 space-y-2 max-h-[520px] overflow-y-auto pr-1" aria-live="polite">
+
+              {/* Outline table of contents */}
+              {outline.length > 0 && (
+                <div className="rounded-lg p-3 mb-3" style={{ background: "var(--surface)", border: "1px solid var(--border)" }}>
+                  <p className="lf-section-label mb-2" style={{ color: "var(--teal)" }}>{t("vibe.progress.tableOfContents")}</p>
+                  {outline.map((ch) => (
+                    <div key={ch.number} className="flex items-baseline gap-2 py-0.5">
+                      <span className="lf-section-label shrink-0" style={{ color: "var(--teal)", minWidth: "2ch" }}>{ch.number}.</span>
+                      <span className="text-xs" style={{ color: "var(--cream-muted)", fontFamily: "var(--font-mono)" }}>{ch.title}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Chapter cards */}
+              {longFormChapters.length === 0 && !lfIsStreaming && !lfError && (
+                <div className="rounded-lg p-6 text-center" style={{ border: "1px dashed var(--border-bright)" }}>
+                  <p className="lf-section-label" style={{ color: "var(--cream-faint)" }}>{t("vibe.status.readyToGenerate")}</p>
+                  <p className="text-xs mt-1" style={{ color: "var(--cream-faint)", fontFamily: "var(--font-mono)", opacity: 0.6 }}>
+                    {t("vibe.status.pressForgeNarrative")}
+                  </p>
+                </div>
+              )}
+
+              {longFormChapters.map((ch) => {
+                const statusColor: Record<ChapterState["status"], string> = {
+                  pending:    "var(--cream-faint)",
+                  generating: "var(--teal)",
+                  complete:   "var(--teal)",
+                };
+                return (
+                  <div
+                    key={ch.outline.number}
+                    className="rounded-lg p-3 space-y-2"
+                    style={{
+                      background: "var(--surface)",
+                      borderTop: `1px solid ${ch.status === "generating" ? "var(--teal)" : "var(--border)"}`,
+                      borderRight: `1px solid ${ch.status === "generating" ? "var(--teal)" : "var(--border)"}`,
+                      borderBottom: `1px solid ${ch.status === "generating" ? "var(--teal)" : "var(--border)"}`,
+                      borderLeft: `3px solid ${statusColor[ch.status]}`,
+                      transition: "border-color 0.3s ease",
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="lf-display" style={{ fontSize: "0.85rem", color: "var(--cream)" }}>
+                        {ch.outline.number}. {ch.outline.title}
+                      </span>
+                      <span
+                        className="text-xs shrink-0"
+                        style={{ fontFamily: "var(--font-mono)", color: statusColor[ch.status] }}
+                      >
+                        {ch.status === "pending" ? t("vibe.status.pending") :
+                         ch.status === "generating" ? t("vibe.status.writing") :
+                         `${t("vibe.status.done")} · ${ch.wordCount}w`}
+                      </span>
+                    </div>
+
+                    {ch.status === "generating" && ch.text.length === 0 && (
+                      <div className="space-y-1.5">
+                        {[0.9, 0.7, 0.85].map((w, i) => (
+                          <div key={i} className="lf-shimmer rounded" style={{ height: "10px", width: `${w * 100}%` }} />
+                        ))}
+                      </div>
+                    )}
+
+                    {ch.text.length > 0 && (
+                      <p
+                        className={`text-xs leading-5 ${ch.status !== "complete" ? "line-clamp-3" : ""} ${ch.status === "generating" ? "lf-streaming" : ""}`}
+                        style={{ color: "var(--cream-muted)", fontFamily: "var(--font-serif)" }}
+                      >
+                        {ch.status !== "complete" ? ch.text.slice(0, 240) : ch.text}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+
+              {lfError && (
+                <Alert className="border-0" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)" }}>
+                  <AlertTitle style={{ color: "var(--rose)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>{t("vibe.progress.error")}</AlertTitle>
+                  <AlertDescription style={{ color: "var(--cream-muted)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>{lfError}</AlertDescription>
+                </Alert>
+              )}
+            </div>
+
+            {longFormChapters.length > 0 && !lfIsStreaming && (
+              <div className="mt-3 flex items-center justify-end gap-3">
+                {pdfError && (
+                  <span className="lf-section-label" style={{ color: "var(--rose)", letterSpacing: "0.05em" }}>
+                    {t("vibe.pdf.exportFailed")}
+                  </span>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setPdfError(null);
+                    const fullText = longFormChapters
+                      .map((ch) => `${ch.outline.number}. ${ch.outline.title}\n\n${ch.text}`)
+                      .join("\n\n\n");
+                    downloadStoryAsPdf(fullText, previewTitle, genre, combinedTitle || undefined).catch((err: unknown) => {
+                      console.error("PDF download failed:", err);
+                      setPdfError(t("vibe.pdf.exportFailed"));
+                    });
+                  }}
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "11px",
+                    color: "var(--teal)",
+                    borderColor: "var(--teal)",
+                    background: "transparent",
+                  }}
+                >
+                  {t("vibe.buttons.downloadPdf")}
+                </Button>
+              </div>
+            )}
+          </Section>
+
+      {/* ── Agent Interaction Log ── */}
+      <AgentInteractionLog entries={lfAgentLog} />
+      </div>
+
+      {/* ── Forge Narrative Button ── */}
+      <div className="lf-entrance-5 flex flex-col items-center gap-3 py-4">
+        {lfIsStreaming && (
+          <span
+            className="text-xs"
+            style={{ fontFamily: "var(--font-mono)", color: "var(--teal)" }}
+          >
+            {formatStreamStatus(lfStatus, t)}...
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={handleGenerate}
+          disabled={lfIsStreaming}
+          aria-label="Forge narrative from current calibration"
+          className={`lf-forge-btn ${lfIsStreaming ? "" : "lf-forge-btn--active"} relative overflow-hidden disabled:opacity-50`}
+        >
+          {lfIsStreaming ? (
+            <span className="flex items-center gap-3">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                style={{ animation: "slowSpin 1.2s linear infinite" }}
+                aria-hidden
+              >
+                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" strokeDasharray="40 20" />
+              </svg>
+              {t("vibe.buttons.brewingNarrative")}
+            </span>
+          ) : (
+            <span className="flex items-center gap-3">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M12 2L14.5 9.5H22L16 14L18.5 21.5L12 17L5.5 21.5L8 14L2 9.5H9.5L12 2Z" fill="currentColor" opacity="0.9" />
+              </svg>
+              {t("vibe.buttons.forgeNarrative")}
+            </span>
+          )}
+        </button>
+        {lfStatus.code === "rate_limited" && (() => {
+          const retryTime = lfStatus.retry_after
+            ? new Date(lfStatus.retry_after).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+              })
+            : "later";
+          return (
+            <p className="text-sm" style={{ color: "var(--error, #f87171)" }}>
+              {t("vibe.status.rateLimitRetryPrefix")} {retryTime}.
+            </p>
+          );
+        })()}
+        {validationError ? (
+          <p
+            className="text-xs text-center"
+            style={{ color: "#EF4444", fontFamily: "var(--font-mono)" }}
+            role="alert"
+          >
+            {validationError}
+          </p>
+        ) : (
+          <p
+            className="text-xs text-center"
+            style={{ color: "var(--cream-faint)", fontFamily: "var(--font-mono)" }}
+          >
+            {genre ? `${toneLabel}` : t("vibe.hints.setGenreToBegin")}
+          </p>
+        )}
+      </div>
+
+    </div>
+  );
+}
