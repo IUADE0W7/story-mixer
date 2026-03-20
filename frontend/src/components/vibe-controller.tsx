@@ -18,6 +18,7 @@ import type { SliderVariant } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/lib/language-context";
 import type { TranslationKey } from "@/locales/index";
+import { isValidLang } from "@/locales/index";
 import {
   bandForNormalizedValue,
   type MetricBand,
@@ -40,6 +41,8 @@ import { downloadStoryAsPdf } from "@/lib/story-pdf";
 interface VibeControllerProps {
   values: VibeValues;
   onChange: (next: VibeValues) => void;
+  token: string | null;
+  onTokenChange: (token: string | null) => void;
 }
 
 interface SliderDefinition {
@@ -71,18 +74,18 @@ const GENRE_TO_FLAVOR_KEY: Record<string, string> = {
 /* ── Seed tags ── */
 type SeedTag = {
   labelKey: TranslationKey;
-  seed: string;
+  seedKey: TranslationKey;
 };
 
 const SEED_TAGS: SeedTag[] = [
-  { labelKey: "vibe.seeds.loneWanderer",    seed: "A lone wanderer arrives at the edge of a dying world with no name and nothing to lose." },
-  { labelKey: "vibe.seeds.darkProphecy",    seed: "A prophecy demands a sacrifice no hero is willing to make — and the clock has already started." },
-  { labelKey: "vibe.seeds.hiddenMonster",   seed: "The monster they feared was never the beast. It was the ally who smiled at the threshold." },
-  { labelKey: "vibe.seeds.unlikelyAllies",  seed: "Two sworn enemies, bound by necessity, must trust each other with the one thing neither can afford to lose." },
-  { labelKey: "vibe.seeds.forbiddenArchive",seed: "A sealed archive holds the one truth that could unravel the empire — and someone already knows it." },
-  { labelKey: "vibe.seeds.lastBloodline",   seed: "The last heir of an ancient bloodline carries a power they cannot control and a price they cannot pay." },
-  { labelKey: "vibe.seeds.theBetrayal",     seed: "A trusted figure betrays them in the final hour. They had good reason. That makes it worse." },
-  { labelKey: "vibe.seeds.shatteredCity",   seed: "A once-great city lies in ruins. Someone is rebuilding it — not to restore what was lost, but to erase it." },
+  { labelKey: "vibe.seeds.loneWanderer",    seedKey: "vibe.seeds.loneWandererSeed" },
+  { labelKey: "vibe.seeds.darkProphecy",    seedKey: "vibe.seeds.darkProphecySeed" },
+  { labelKey: "vibe.seeds.hiddenMonster",   seedKey: "vibe.seeds.hiddenMonsterSeed" },
+  { labelKey: "vibe.seeds.unlikelyAllies",  seedKey: "vibe.seeds.unlikelyAlliesSeed" },
+  { labelKey: "vibe.seeds.forbiddenArchive",seedKey: "vibe.seeds.forbiddenArchiveSeed" },
+  { labelKey: "vibe.seeds.lastBloodline",   seedKey: "vibe.seeds.lastBloodlineSeed" },
+  { labelKey: "vibe.seeds.theBetrayal",     seedKey: "vibe.seeds.theBetraySeed" },
+  { labelKey: "vibe.seeds.shatteredCity",   seedKey: "vibe.seeds.shatteredCitySeed" },
 ];
 
 const sliderDefinitions: SliderDefinition[] = [
@@ -350,6 +353,8 @@ function formatStreamStatus(status: StreamStatus, t: (key: import("@/locales/ind
 export function VibeController({
   values,
   onChange,
+  token,
+  onTokenChange,
 }: VibeControllerProps) {
   const { lang, setLang, t, flag } = useLanguage();
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>(DEFAULT_PROVIDER_CONFIG);
@@ -359,11 +364,9 @@ export function VibeController({
   const [genre, setGenre]                 = useState<string>("");
   const [chapterCount, setChapterCount]   = useState(4);
   const [chapterWords, setChapterWords]   = useState(400);
+  const [enableCritic, setEnableCritic]   = useState(true);
   const [langBannerDismissed, setLangBannerDismissed] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
-  const [token, setToken] = useState<string | null>(() =>
-    typeof window !== "undefined" ? localStorage.getItem("lf_token") : null
-  );
 
   /* Derived title from two source tales */
   const combinedTitle = [sourceTaleA.trim(), sourceTaleB.trim()].filter(Boolean).join(" × ");
@@ -390,9 +393,9 @@ export function VibeController({
   useEffect(() => {
     if (lfStatus.code === "unauthenticated") {
       localStorage.removeItem("lf_token");
-      setToken(null);
+      onTokenChange(null);
     }
-  }, [lfStatus.code]);
+  }, [lfStatus.code, onTokenChange]);
 
   const previewTitle  = useMemo(() => buildPreviewTitle(values, combinedTitle), [values, combinedTitle]);
 
@@ -428,6 +431,7 @@ export function VibeController({
       providerConfig,
       chapterCount,
       chapterWordTarget: chapterWords,
+      enableCritic,
       token,
     });
   };
@@ -435,66 +439,72 @@ export function VibeController({
   return (
     <div className="space-y-4">
       {!token && (
-        <AuthModal onAuthenticated={(t) => setToken(t)} />
+        <AuthModal onAuthenticated={(t) => onTokenChange(t)} />
       )}
 
-      {/* ── Story Briefing ── */}
+      {/* ── Unified grid: top row + bottom row share the same 3-col tracks ── */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+
+      {/* ── Story Setup (merged Briefing + Provider) ── */}
       <Section
         id="brief-heading"
         label={t("vibe.briefing.sectionLabel")}
         description={t("vibe.briefing.description")}
         entranceClass="lf-entrance-1"
+        className="xl:col-span-3"
       >
-        {/* Source Tale fields */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 mb-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="source-tale-a" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-              {t("vibe.briefing.sourceTaleA")}
-            </Label>
-            <Input
-              id="source-tale-a"
-              value={sourceTaleA}
-              onChange={(e) => { setSourceTaleA(e.target.value); setValidationError(null); }}
-              placeholder={t("vibe.placeholders.sourceTaleA")}
-              aria-label="First source tale"
-              style={inputStyle}
-              className="border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6]"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="source-tale-b" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-              {t("vibe.briefing.sourceTaleB")}
-            </Label>
-            <Input
-              id="source-tale-b"
-              value={sourceTaleB}
-              onChange={(e) => { setSourceTaleB(e.target.value); setValidationError(null); }}
-              placeholder={t("vibe.placeholders.sourceTaleB")}
-              aria-label="Second source tale"
-              style={inputStyle}
-              className="border-0 focus-visible:ring-1 focus-visible:ring-[#F59E0B]"
-            />
-          </div>
-        </div>
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1.1fr)]">
 
-        {/* Combined title preview */}
-        {combinedTitle && (
-          <div
-            className="flex items-center gap-2 mb-4 px-3 py-2 rounded-lg"
-            style={{ background: "var(--teal-glow)", border: "1px solid rgba(20,184,166,0.18)" }}
-          >
-            <span className="lf-section-label" style={{ color: "var(--teal)" }}>MIX</span>
-            <span className="text-sm" style={{ color: "var(--cream)", fontFamily: "var(--font-display)", fontStyle: "italic" }}>
-              {combinedTitle}
-            </span>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)]">
-
-          {/* Left: genre + language + chapter settings */}
+          {/* ── ORIGIN: source tales + genre + language ── */}
           <div className="space-y-3">
-            {/* Genre */}
+            <div className="space-y-1.5">
+              <Label htmlFor="source-tale-a" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                {t("vibe.briefing.sourceTaleA")}
+              </Label>
+              <Input
+                id="source-tale-a"
+                value={sourceTaleA}
+                onChange={(e) => { setSourceTaleA(e.target.value); setValidationError(null); }}
+                placeholder={t("vibe.placeholders.sourceTaleA")}
+                aria-label="First source tale"
+                style={inputStyle}
+                className="border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6]"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+              <span className="lf-section-label" style={{ color: "var(--teal)", fontSize: "11px" }}>×</span>
+              <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="source-tale-b" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                {t("vibe.briefing.sourceTaleB")}
+              </Label>
+              <Input
+                id="source-tale-b"
+                value={sourceTaleB}
+                onChange={(e) => { setSourceTaleB(e.target.value); setValidationError(null); }}
+                placeholder={t("vibe.placeholders.sourceTaleB")}
+                aria-label="Second source tale"
+                style={inputStyle}
+                className="border-0 focus-visible:ring-1 focus-visible:ring-[#F59E0B]"
+              />
+            </div>
+
+            {combinedTitle && (
+              <div
+                className="flex items-center gap-2 px-3 py-2 rounded-lg"
+                style={{ background: "var(--teal-glow)", border: "1px solid rgba(20,184,166,0.18)" }}
+              >
+                <span className="lf-section-label" style={{ color: "var(--teal)" }}>MIX</span>
+                <span className="text-sm truncate" style={{ color: "var(--cream)", fontFamily: "var(--font-display)", fontStyle: "italic" }}>
+                  {combinedTitle}
+                </span>
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <Label htmlFor="genre-select" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
                 {t("vibe.fields.genre")}
@@ -511,30 +521,23 @@ export function VibeController({
                 <SelectContent style={selectContentStyle}>
                   {GENRE_OPTIONS.map((g) => (
                     <SelectItem key={g} value={g} className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">
-                      {g}
+                      {t(`vibe.genres.${GENRE_TO_FLAVOR_KEY[g]}` as TranslationKey)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
 
-            {/* Narrative tone preview panel */}
             <div
               className="rounded-lg px-3 py-2.5 space-y-0.5"
-              style={{
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-              }}
+              style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
               aria-live="polite"
               aria-label="Narrative tone preview"
             >
               <p className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
                 {t("vibe.briefing.narrativeTone")}
               </p>
-              <p
-                className="lf-display leading-tight"
-                style={{ fontSize: "0.95rem", color: "var(--cream)" }}
-              >
+              <p className="lf-display leading-tight" style={{ fontSize: "0.9rem", color: "var(--cream)" }}>
                 {toneLabel}
               </p>
             </div>
@@ -547,7 +550,7 @@ export function VibeController({
                 <Select
                   value={lang}
                   onValueChange={(v) => {
-                    setLang(v === "uk" ? "uk" : "en");
+                    if (isValidLang(v)) setLang(v);
                     setLangBannerDismissed(false);
                   }}
                 >
@@ -562,68 +565,27 @@ export function VibeController({
                   <SelectContent style={selectContentStyle}>
                     <SelectItem value="en" className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">{t("vibe.language.english")}</SelectItem>
                     <SelectItem value="uk" className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">{t("vibe.language.ukrainian")}</SelectItem>
+                    <SelectItem value="ru" className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">{t("vibe.language.russian")}</SelectItem>
+                    <SelectItem value="kk" className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">{t("vibe.language.kazakh")}</SelectItem>
                   </SelectContent>
                 </Select>
                 <span aria-hidden className="text-lg">{flag}</span>
               </div>
             </div>
-
-            {/* Chapter settings */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="chapter-count" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-                  {t("vibe.fields.chapters")}
-                </Label>
-                <Input
-                  id="chapter-count"
-                  type="number"
-                  min={2}
-                  max={10}
-                  step={1}
-                  value={chapterCount}
-                  onChange={(e) => setChapterCount(Math.max(2, Math.min(10, Number(e.target.value))))}
-                  style={inputStyle}
-                  className="border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] text-center"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="chapter-words" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-                  {t("vibe.fields.wordsPerChapter")}
-                </Label>
-                <Input
-                  id="chapter-words"
-                  type="number"
-                  min={100}
-                  max={2000}
-                  step={100}
-                  value={chapterWords}
-                  onChange={(e) => setChapterWords(Math.max(100, Math.min(2000, Number(e.target.value))))}
-                  style={inputStyle}
-                  className="border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] text-center"
-                />
-              </div>
-            </div>
           </div>
 
-          {/* Right: seed tags + brief textarea + language banner */}
+          {/* ── BRIEF: seed tags + textarea + banner ── */}
           <div className="space-y-2">
-            <div className="flex items-baseline justify-between gap-2">
-              <Label htmlFor="story-brief-input" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-                {t("vibe.brief.sectionLabel")}
-              </Label>
-            </div>
+            <Label htmlFor="story-brief-input" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+              {t("vibe.brief.sectionLabel")}
+            </Label>
 
-            {/* Seed tags */}
-            <div
-              className="flex flex-wrap gap-1.5 pb-1"
-              role="group"
-              aria-label="Story seed suggestions"
-            >
+            <div className="flex flex-wrap gap-1.5 pb-1" role="group" aria-label="Story seed suggestions">
               {SEED_TAGS.map((tag) => (
                 <button
                   key={tag.labelKey}
                   type="button"
-                  onClick={() => handleSeedTag(tag.seed)}
+                  onClick={() => handleSeedTag(t(tag.seedKey))}
                   className="px-2 py-0.5 rounded transition-all duration-150 hover:border-[var(--teal)] hover:text-[var(--teal)] active:scale-95"
                   style={{
                     fontFamily: "var(--font-mono)",
@@ -649,18 +611,14 @@ export function VibeController({
               }}
               placeholder={t("vibe.brief.placeholder")}
               aria-label="Custom story brief"
-              className="min-h-28 border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] resize-none lf-manuscript"
+              className="min-h-36 border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] resize-none lf-manuscript"
               style={{ ...inputStyle, fontSize: "13px", lineHeight: "1.7" }}
             />
 
-            {/* Language detection banner */}
             {showLangBanner && (
               <div
                 className="flex items-center justify-between gap-3 rounded-lg px-3 py-2"
-                style={{
-                  background: "rgba(20,184,166,0.07)",
-                  border: "1px solid rgba(20,184,166,0.25)",
-                }}
+                style={{ background: "rgba(20,184,166,0.07)", border: "1px solid rgba(20,184,166,0.25)" }}
                 role="alert"
               >
                 <p className="text-xs" style={{ color: "var(--teal)", fontFamily: "var(--font-mono)" }}>
@@ -671,13 +629,7 @@ export function VibeController({
                     type="button"
                     onClick={() => { setLang("uk"); setLangBannerDismissed(true); }}
                     className="px-2 py-0.5 rounded text-xs transition-colors"
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      background: "var(--teal)",
-                      color: "#0B0E14",
-                      fontSize: "10px",
-                      letterSpacing: "0.1em",
-                    }}
+                    style={{ fontFamily: "var(--font-mono)", background: "var(--teal)", color: "#0B0E14", fontSize: "10px", letterSpacing: "0.1em" }}
                   >
                     {t("vibe.buttons.switch")}
                   </button>
@@ -685,13 +637,7 @@ export function VibeController({
                     type="button"
                     onClick={() => setLangBannerDismissed(true)}
                     className="px-2 py-0.5 rounded text-xs transition-colors"
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      color: "var(--cream-faint)",
-                      fontSize: "10px",
-                      letterSpacing: "0.1em",
-                      border: "1px solid var(--border)",
-                    }}
+                    style={{ fontFamily: "var(--font-mono)", color: "var(--cream-faint)", fontSize: "10px", letterSpacing: "0.1em", border: "1px solid var(--border)" }}
                   >
                     {t("vibe.buttons.dismiss")}
                   </button>
@@ -699,11 +645,150 @@ export function VibeController({
               </div>
             )}
           </div>
+
+          {/* ── ENGINE: provider + model + generation params + tone readout ── */}
+          <div className="space-y-3">
+            <p className="lf-section-label" style={{ color: "var(--cream-faint)", opacity: 0.55, letterSpacing: "0.12em" }}>
+              {t("vibe.provider.sectionLabel")}
+            </p>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-select" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                {t("vibe.fields.provider")}
+              </Label>
+              <Select
+                value={providerConfig.provider}
+                onValueChange={(nextProvider) => {
+                  const option = PROVIDER_OPTIONS.find((o) => o.id === nextProvider);
+                  const nextModel = option?.defaultModel ?? providerConfig.model;
+                  setProviderConfig((p) => ({ ...p, provider: nextProvider, model: nextModel, judgeModel: nextModel }));
+                }}
+              >
+                <SelectTrigger
+                  id="provider-select"
+                  className="w-full border-0 focus:ring-1 focus:ring-[#14B8A6]"
+                  style={inputStyle}
+                  aria-label="Select LLM provider"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent style={selectContentStyle}>
+                  {PROVIDER_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.id} value={opt.id} className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]">
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="model-input" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                  {t("vibe.fields.model")}
+                </Label>
+                <Input
+                  id="model-input"
+                  value={providerConfig.model}
+                  onChange={(e) => setProviderConfig((p) => ({ ...p, model: e.target.value }))}
+                  aria-label="Model name"
+                  className="w-full border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6]"
+                  style={inputStyle}
+                />
+              </div>
+              {enableCritic && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="judge-model-input" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                    {t("vibe.fields.judgeModel")}
+                  </Label>
+                  <Input
+                    id="judge-model-input"
+                    value={providerConfig.judgeModel}
+                    onChange={(e) => setProviderConfig((p) => ({ ...p, judgeModel: e.target.value }))}
+                    aria-label="Judge model name"
+                    className="w-full border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6]"
+                    style={inputStyle}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="temperature-input" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                  {t("vibe.fields.temperature")}
+                </Label>
+                <Input
+                  id="temperature-input"
+                  type="number"
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={providerConfig.temperature}
+                  onChange={(e) => {
+                    const parsed = parseFloat(e.target.value);
+                    if (Number.isFinite(parsed)) {
+                      setProviderConfig((p) => ({ ...p, temperature: Math.max(0, Math.min(2, parsed)) }));
+                    }
+                  }}
+                  aria-label="Temperature"
+                  className="w-full border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] text-center"
+                  style={inputStyle}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="chapter-count" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                  {t("vibe.fields.chapters")}
+                </Label>
+                <Input
+                  id="chapter-count"
+                  type="number"
+                  min={2}
+                  max={10}
+                  step={1}
+                  value={chapterCount}
+                  onChange={(e) => setChapterCount(Math.max(2, Math.min(10, Number(e.target.value))))}
+                  style={inputStyle}
+                  className="w-full border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] text-center"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="chapter-words" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                {t("vibe.fields.wordsPerChapter")}
+              </Label>
+              <Input
+                id="chapter-words"
+                type="number"
+                min={100}
+                max={2000}
+                step={100}
+                value={chapterWords}
+                onChange={(e) => setChapterWords(Math.max(100, Math.min(2000, Number(e.target.value))))}
+                style={inputStyle}
+                className="w-full border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6] text-center"
+              />
+            </div>
+
+            <label htmlFor="enable-critic" className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                id="enable-critic"
+                type="checkbox"
+                checked={enableCritic}
+                onChange={(e) => setEnableCritic(e.target.checked)}
+                className="accent-[#14B8A6] w-3.5 h-3.5 cursor-pointer"
+              />
+              <span className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
+                {t("vibe.fields.enableCritic")}
+              </span>
+            </label>
+
+          </div>
+
         </div>
       </Section>
 
-      {/* ── Three-column grid: Channels / Preview / History ── */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
 
         {/* ── Channel Calibration (Mixing Board) ── */}
         <Section
@@ -788,7 +873,9 @@ export function VibeController({
                     className="rounded-lg p-3 space-y-2"
                     style={{
                       background: "var(--surface)",
-                      border: `1px solid ${ch.status === "generating" ? "var(--teal)" : ch.status === "revising" ? "var(--amber)" : "var(--border)"}`,
+                      borderTop: `1px solid ${ch.status === "generating" ? "var(--teal)" : ch.status === "revising" ? "var(--amber)" : "var(--border)"}`,
+                      borderRight: `1px solid ${ch.status === "generating" ? "var(--teal)" : ch.status === "revising" ? "var(--amber)" : "var(--border)"}`,
+                      borderBottom: `1px solid ${ch.status === "generating" ? "var(--teal)" : ch.status === "revising" ? "var(--amber)" : "var(--border)"}`,
                       borderLeft: `3px solid ${statusColor[ch.status]}`,
                       transition: "border-color 0.3s ease",
                     }}
@@ -851,7 +938,7 @@ export function VibeController({
                     const fullText = longFormChapters
                       .map((ch) => `${ch.outline.number}. ${ch.outline.title}\n\n${ch.text}`)
                       .join("\n\n\n");
-                    downloadStoryAsPdf(fullText, previewTitle, genre).catch((err: unknown) => {
+                    downloadStoryAsPdf(fullText, previewTitle, genre, combinedTitle || undefined).catch((err: unknown) => {
                       console.error("PDF download failed:", err);
                       setPdfError(t("vibe.pdf.exportFailed"));
                     });
@@ -873,104 +960,6 @@ export function VibeController({
       {/* ── Agent Interaction Log ── */}
       <AgentInteractionLog entries={lfAgentLog} />
       </div>
-
-      {/* ── Provider Configuration ── */}
-      <Section
-        id="provider-heading"
-        label={t("vibe.provider.sectionLabel")}
-        entranceClass="lf-entrance-5"
-      >
-        <div className="flex flex-wrap items-end gap-4">
-          {/* Provider */}
-          <div className="space-y-1.5">
-            <Label htmlFor="provider-select" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-              {t("vibe.fields.provider")}
-            </Label>
-            <Select
-              value={providerConfig.provider}
-              onValueChange={(nextProvider) => {
-                const option    = PROVIDER_OPTIONS.find((o) => o.id === nextProvider);
-                const nextModel = option?.defaultModel ?? providerConfig.model;
-                setProviderConfig((p) => ({ ...p, provider: nextProvider, model: nextModel, judgeModel: nextModel }));
-              }}
-            >
-              <SelectTrigger
-                id="provider-select"
-                className="w-44 border-0 focus:ring-1 focus:ring-[#14B8A6]"
-                style={inputStyle}
-                aria-label="Select LLM provider"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent style={selectContentStyle}>
-                {PROVIDER_OPTIONS.map((opt) => (
-                  <SelectItem
-                    key={opt.id}
-                    value={opt.id}
-                    className="focus:bg-[var(--surface-high)] focus:text-[var(--cream)]"
-                  >
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Model */}
-          <div className="space-y-1.5">
-            <Label htmlFor="model-input" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-              {t("vibe.fields.model")}
-            </Label>
-            <Input
-              id="model-input"
-              value={providerConfig.model}
-              onChange={(e) => setProviderConfig((p) => ({ ...p, model: e.target.value }))}
-              aria-label="Model name"
-              className="w-52 border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6]"
-              style={inputStyle}
-            />
-          </div>
-
-          {/* Judge Model */}
-          <div className="space-y-1.5">
-            <Label htmlFor="judge-model-input" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-              {t("vibe.fields.judgeModel")}
-            </Label>
-            <Input
-              id="judge-model-input"
-              value={providerConfig.judgeModel}
-              onChange={(e) => setProviderConfig((p) => ({ ...p, judgeModel: e.target.value }))}
-              aria-label="Judge model name"
-              className="w-52 border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6]"
-              style={inputStyle}
-            />
-          </div>
-
-          {/* Temperature */}
-          <div className="space-y-1.5">
-            <Label htmlFor="temperature-input" className="lf-section-label" style={{ color: "var(--cream-faint)" }}>
-              {t("vibe.fields.temperature")}
-            </Label>
-            <Input
-              id="temperature-input"
-              type="number"
-              min={0}
-              max={2}
-              step={0.1}
-              value={providerConfig.temperature}
-              onChange={(e) => {
-                const parsed = parseFloat(e.target.value);
-                if (Number.isFinite(parsed)) {
-                  setProviderConfig((p) => ({ ...p, temperature: Math.max(0, Math.min(2, parsed)) }));
-                }
-              }}
-              aria-label="Temperature"
-              className="w-20 border-0 focus-visible:ring-1 focus-visible:ring-[#14B8A6]"
-              style={inputStyle}
-            />
-          </div>
-        </div>
-      </Section>
 
       {/* ── Forge Narrative Button ── */}
       <div className="lf-entrance-5 flex flex-col items-center gap-3 py-4">
