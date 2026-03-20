@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
@@ -75,11 +76,12 @@ class StructuredOutlineAgent:
         request: LongFormRequest,
         calibration: CalibrationProfile,
     ) -> list[ChapterOutline]:
-        chat_model = build_chat_model(for_judge=False)
+        chat_model = build_chat_model()
         structured = chat_model.with_structured_output(_OutlineSpec)
 
         directive_lines = "\n".join(
-            f"- {d.metric_name}: {d.instruction}" for d in calibration.directives
+            f"- {d.metric_name}: {d.instruction} | NOT: {d.negative_instruction}"
+            for d in calibration.directives
         )
         genre = request.context.genre or "unspecified"
         lang = (request.context.language or "").strip().lower()
@@ -91,25 +93,34 @@ class StructuredOutlineAgent:
         elif lang in ("kk", "kaz", "kazakh"):
             lang_instruction = "Output language requirement: Kazakh only (Cyrillic script). Do not switch to English or Russian.\n\n"
 
-        prompt = (
-            "You are LoreForge outline architect. Generate a structured chapter plan.\n\n"
+        system_content = (
+            "You are LoreForge outline architect.\n\n"
+            "Vibe directives — the outline structure must reflect these, not just the prose:\n"
+            f"{directive_lines}\n\n"
+            "Chapter arcs, turning points, and pacing must reflect the calibration above.\n"
+            + (lang_instruction if lang_instruction else "")
+        )
+
+        user_content = (
             f"{lang_instruction}"
             f"Story brief: {request.context.user_prompt}\n"
             f"Genre: {genre}\n"
             f"Public title: {request.context.public_title or 'untitled'}\n"
             f"Chapters requested: {request.chapter_count}\n"
-            f"Target words per chapter: ~{request.chapter_word_target}\n\n"
-            f"Vibe directives:\n{directive_lines}\n\n"
+            f"Target words per chapter: ~{request.chapter_word_target}\n"
             "Return a JSON object with a 'chapters' array. Each entry must have:\n"
-            "  number (int, starting at 1), title (str), "
-            "summary (str, 1-2 sentences describing the chapter arc), "
-            "word_target (int).\n"
+            "  number (int, starting at 1)\n"
+            "  title (str)\n"
+            "  summary (str, 1-2 sentences describing the chapter arc)\n"
+            "  word_target (int)\n"
             "Ensure chapters form a coherent narrative arc from opening to resolution."
         )
 
+        messages = [SystemMessage(content=system_content), HumanMessage(content=user_content)]
+
         logger.info("Outline agent: provider=%s model=%s", settings.llm_provider, settings.llm_model)
-        logger.debug("Outline prompt: %d chars", len(prompt))
-        result: _OutlineSpec = await structured.ainvoke(prompt)  # type: ignore[assignment]
+        logger.debug("Outline prompt: %d chars", sum(len(m.content) for m in messages))
+        result: _OutlineSpec = await structured.ainvoke(messages)  # type: ignore[assignment]
         logger.info("Outline response received: %d chapters parsed", len(result.chapters))
 
         chapters = sorted(result.chapters, key=lambda c: c.number)
