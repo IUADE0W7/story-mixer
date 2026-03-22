@@ -115,8 +115,20 @@ echo "[8/11] Configuring PostgreSQL"
 systemctl enable postgresql
 systemctl start postgresql
 
-sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${POSTGRES_USER}'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE ROLE ${POSTGRES_USER} LOGIN PASSWORD '${POSTGRES_PASSWORD}';"
+sudo -u postgres psql \
+    -v role_name="${POSTGRES_USER}" \
+    -v role_password="${POSTGRES_PASSWORD}" \
+    <<'SQL'
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role_name') THEN
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', :'role_name', :'role_password');
+    ELSE
+        EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'role_name', :'role_password');
+    END IF;
+END $$;
+SQL
+
 sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1 || \
     sudo -u postgres createdb -O "${POSTGRES_USER}" "${POSTGRES_DB}"
 
@@ -156,7 +168,7 @@ Group=${DEPLOY_USER}
 WorkingDirectory=${DEPLOY_DIR}/frontend
 Environment=NODE_ENV=production
 Environment=BACKEND_URL=http://127.0.0.1:8000
-ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port 3000
+ExecStart=/bin/bash -lc 'set -a; source ${DEPLOY_DIR}/.env; set +a; export BACKEND_URL=http://127.0.0.1:8000; if [ -f "${DEPLOY_DIR}/frontend/.next/standalone/server.js" ]; then exec /usr/bin/node "${DEPLOY_DIR}/frontend/.next/standalone/server.js"; else exec /usr/bin/npm run start -- --hostname 127.0.0.1 --port 3000; fi'
 Restart=always
 RestartSec=5
 
