@@ -135,7 +135,7 @@ sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_D
 echo "[9/11] Installing app dependencies"
 su - "${DEPLOY_USER}" -c "cd '${DEPLOY_DIR}' && python3 -m venv .venv"
 su - "${DEPLOY_USER}" -c "cd '${DEPLOY_DIR}' && . .venv/bin/activate && pip install --upgrade pip && pip install -e backend"
-su - "${DEPLOY_USER}" -c "cd '${DEPLOY_DIR}/frontend' && npm ci && npm run build"
+su - "${DEPLOY_USER}" -c "cd '${DEPLOY_DIR}/frontend' && . ${DEPLOY_DIR}/.env && npm ci && npm run build"
 
 echo "[10/11] Creating systemd services"
 cat >/etc/systemd/system/loreforge-backend.service <<EOF
