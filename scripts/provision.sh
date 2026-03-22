@@ -30,6 +30,7 @@ apt-get install -y \
     ca-certificates \
     curl \
     git \
+    rsync \
     jq \
     ufw \
     postgresql \

@@ -124,13 +124,32 @@ cd "${DEPLOY_DIR}/frontend"
 npm ci
 npm run build
 
+# Next.js standalone server requires static/public assets copied into standalone tree.
+if [[ -f "${DEPLOY_DIR}/frontend/.next/standalone/server.js" ]]; then
+	echo "[6.1] Preparing standalone static/public assets"
+	mkdir -p "${DEPLOY_DIR}/frontend/.next/standalone/.next"
+	rm -rf "${DEPLOY_DIR}/frontend/.next/standalone/.next/static"
+	cp -a "${DEPLOY_DIR}/frontend/.next/static" "${DEPLOY_DIR}/frontend/.next/standalone/.next/static"
+	if [[ -d "${DEPLOY_DIR}/frontend/public" ]]; then
+		rm -rf "${DEPLOY_DIR}/frontend/.next/standalone/public"
+		cp -a "${DEPLOY_DIR}/frontend/public" "${DEPLOY_DIR}/frontend/.next/standalone/public"
+	fi
+fi
+
 # Create atomic frontend release: copy built artifacts to a timestamped release and swap symlink
 RELEASE_TS=$(date +%s)
 RELEASE_DIR="${DEPLOY_DIR}/releases/${RELEASE_TS}"
 echo "[6.2] Creating frontend release ${RELEASE_DIR}"
 mkdir -p "${RELEASE_DIR}"
 # Copy frontend sources and built artifacts (exclude node_modules and .git)
-rsync -a --delete --exclude='.git' --exclude='node_modules' "${DEPLOY_DIR}/frontend/" "${RELEASE_DIR}/frontend/"
+if command -v rsync >/dev/null 2>&1; then
+	rsync -a --delete --exclude='.git' --exclude='node_modules' "${DEPLOY_DIR}/frontend/" "${RELEASE_DIR}/frontend/"
+else
+	echo "rsync not found; falling back to cp for release copy"
+	mkdir -p "${RELEASE_DIR}/frontend"
+	cp -a "${DEPLOY_DIR}/frontend/." "${RELEASE_DIR}/frontend/"
+	rm -rf "${RELEASE_DIR}/frontend/.git" "${RELEASE_DIR}/frontend/node_modules"
+fi
 # Ensure the symlink `frontend_current` atomically points to new release
 ln -sfn "${RELEASE_DIR}/frontend" "${DEPLOY_DIR}/frontend_current"
 echo "[6.3] Frontend symlinked to ${DEPLOY_DIR}/frontend_current"
