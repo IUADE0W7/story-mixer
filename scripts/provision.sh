@@ -177,10 +177,10 @@ After=network.target loreforge-backend.service
 Type=simple
 User=${DEPLOY_USER}
 Group=${DEPLOY_USER}
-WorkingDirectory=${DEPLOY_DIR}/frontend
+WorkingDirectory=${DEPLOY_DIR}/frontend_current
 Environment=NODE_ENV=production
 Environment=BACKEND_URL=http://127.0.0.1:8000
-ExecStart=/bin/bash -lc 'set -a; source ${DEPLOY_DIR}/.env; set +a; export BACKEND_URL=http://127.0.0.1:8000; if [ -f "${DEPLOY_DIR}/frontend/.next/standalone/server.js" ]; then exec /usr/bin/node "${DEPLOY_DIR}/frontend/.next/standalone/server.js"; else exec /usr/bin/npm run start -- --hostname 127.0.0.1 --port 3000; fi'
+ExecStart=/bin/bash -lc 'set -a; source ${DEPLOY_DIR}/.env; set +a; export BACKEND_URL=http://127.0.0.1:8000; if [ -f "${DEPLOY_DIR}/frontend_current/.next/standalone/server.js" ]; then exec /usr/bin/node "${DEPLOY_DIR}/frontend_current/.next/standalone/server.js"; else exec /usr/bin/npm run start -- --hostname 127.0.0.1 --port 3000; fi'
 Restart=always
 RestartSec=5
 
@@ -198,8 +198,21 @@ EOF
 else
     cat >/etc/caddy/Caddyfile <<EOF
 ${DOMAIN} {
+    # API
     reverse_proxy /api/v1/* 127.0.0.1:8000
+
+    # Frontend app
     reverse_proxy * 127.0.0.1:3000
+
+    # Cache headers: immutable hashed assets and short-lived HTML
+    @nextstatic path /_next/static/*
+    header @nextstatic Cache-Control "public, max-age=31536000, immutable"
+
+    @nextchunks path /_next/static/chunks/*
+    header @nextchunks Cache-Control "public, max-age=31536000, immutable"
+
+    @root path /
+    header @root Cache-Control "public, max-age=60"
 }
 EOF
 fi

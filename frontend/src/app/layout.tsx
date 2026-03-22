@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { LanguageProvider } from "@/lib/language-context";
 import { Providers } from "@/components/providers";
+import ErrorReload from "@/components/error-reload.client";
 
 export const metadata: Metadata = {
   title: "Story Mixer — LoreForge",
@@ -13,7 +14,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className="dark">
       <body suppressHydrationWarning className="min-h-screen" style={{ background: "var(--ink)" }}>
         <Providers>
-          <LanguageProvider>{children}</LanguageProvider>
+          <LanguageProvider>
+            <ErrorReload />
+            {children}
+          </LanguageProvider>
         </Providers>
       </body>
     </html>

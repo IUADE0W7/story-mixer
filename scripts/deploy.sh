@@ -124,10 +124,20 @@ cd "${DEPLOY_DIR}/frontend"
 npm ci
 npm run build
 
+# Create atomic frontend release: copy built artifacts to a timestamped release and swap symlink
+RELEASE_TS=$(date +%s)
+RELEASE_DIR="${DEPLOY_DIR}/releases/${RELEASE_TS}"
+echo "[6.2] Creating frontend release ${RELEASE_DIR}"
+mkdir -p "${RELEASE_DIR}"
+# Copy frontend sources and built artifacts (exclude node_modules and .git)
+rsync -a --delete --exclude='.git' --exclude='node_modules' "${DEPLOY_DIR}/frontend/" "${RELEASE_DIR}/frontend/"
+# Ensure the symlink `frontend_current` atomically points to new release
+ln -sfn "${RELEASE_DIR}/frontend" "${DEPLOY_DIR}/frontend_current"
+echo "[6.3] Frontend symlinked to ${DEPLOY_DIR}/frontend_current"
+
 # If Next.js produced a standalone build, update the systemd unit to start the standalone server
-if [[ -f "${DEPLOY_DIR}/frontend/.next/standalone/server.js" ]]; then
-	echo "[6.1] Standalone frontend detected — updating systemd unit"
-	sudo bash -c "cat >/etc/systemd/system/loreforge-frontend.service <<'UNIT'
+echo "[6.4] Updating systemd unit to use frontend_current"
+sudo bash -c "cat >/etc/systemd/system/loreforge-frontend.service <<'UNIT'
 [Unit]
 Description=LoreForge Frontend (Next.js)
 After=network.target loreforge-backend.service
@@ -136,26 +146,40 @@ After=network.target loreforge-backend.service
 Type=simple
 User=${DEPLOY_USER}
 Group=${DEPLOY_USER}
-WorkingDirectory=${DEPLOY_DIR}/frontend
+WorkingDirectory=${DEPLOY_DIR}/frontend_current
 Environment=NODE_ENV=production
 Environment=BACKEND_URL=http://127.0.0.1:8000
-ExecStart=/bin/bash -lc 'set -a; source ${DEPLOY_DIR}/.env; set +a; export BACKEND_URL=http://127.0.0.1:8000; exec /usr/bin/node ${DEPLOY_DIR}/frontend/.next/standalone/server.js'
+ExecStart=/bin/bash -lc 'set -a; source ${DEPLOY_DIR}/.env; set +a; export BACKEND_URL=http://127.0.0.1:8000; if [ -f "${DEPLOY_DIR}/frontend_current/.next/standalone/server.js" ]; then exec /usr/bin/node "${DEPLOY_DIR}/frontend_current/.next/standalone/server.js"; else exec /usr/bin/npm run start -- --hostname 127.0.0.1 --port 3000; fi'
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 UNIT"
-	sudo systemctl daemon-reload
-fi
+sudo systemctl daemon-reload
+
 
 # Update Caddyfile if DOMAIN is set to a real domain
 if [[ -n "${DOMAIN:-}" && "${DOMAIN}" != "yourdomain.com" ]]; then
 	echo "[6.2] Updating /etc/caddy/Caddyfile for ${DOMAIN}"
 	sudo bash -c "cat >/etc/caddy/Caddyfile <<EOF
 ${DOMAIN} {
+	# API
 	reverse_proxy /api/v1/* 127.0.0.1:8000
+
+	# Frontend
 	reverse_proxy * 127.0.0.1:3000
+
+	# Cache headers for Next.js hashed assets
+	@nextstatic path /_next/static/*
+	header @nextstatic Cache-Control \"public, max-age=31536000, immutable\"
+
+	@nextchunks path /_next/static/chunks/*
+	header @nextchunks Cache-Control \"public, max-age=31536000, immutable\"
+
+	# Keep HTML short-lived so clients pick up new builds quickly
+	@root path /
+	header @root Cache-Control \"public, max-age=60\"
 }
 EOF"
 	echo "Validating Caddyfile"
