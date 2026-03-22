@@ -102,6 +102,15 @@ POSTGRES_DB="${POSTGRES_DB:-loreforge}"
 DOMAIN="${DOMAIN:-yourdomain.com}"
 DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
 
+if ! grep -q '^JWT_SECRET=' "${DEPLOY_DIR}/.env"; then
+    GENERATED_JWT_SECRET="$(python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(48))
+PY
+)"
+    printf '\nJWT_SECRET=%s\n' "${GENERATED_JWT_SECRET}" >>"${DEPLOY_DIR}/.env"
+fi
+
 echo "[8/11] Configuring PostgreSQL"
 systemctl enable postgresql
 systemctl start postgresql

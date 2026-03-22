@@ -29,7 +29,16 @@ if [[ ! -f "${DEPLOY_DIR}/.env" ]]; then
 fi
 
 # shellcheck disable=SC1090
+set -a
 source "${DEPLOY_DIR}/.env"
+set +a
+
+if [[ -z "${JWT_SECRET:-}" ]]; then
+	echo "Missing JWT_SECRET in ${DEPLOY_DIR}/.env" >&2
+	echo "Set JWT_SECRET and run deploy again." >&2
+	exit 1
+fi
+
 POSTGRES_USER="${POSTGRES_USER:-loreforge}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-changeme}"
 POSTGRES_DB="${POSTGRES_DB:-loreforge}"
@@ -40,21 +49,42 @@ echo "[2/6] Updating backend dependencies"
 pip install --upgrade pip
 pip install -e backend
 
-echo "[3/6] Applying database migrations"
+echo "[3/6] Validating backend configuration"
+cd "${DEPLOY_DIR}/backend"
+if ! DATABASE_URL="${DATABASE_URL}" "${DEPLOY_DIR}/.venv/bin/python" - <<'PY'
+from pydantic import ValidationError
+
+from app.config import AppSettings
+
+try:
+	AppSettings()
+except ValidationError as exc:
+	print("Backend settings validation failed.")
+	for error in exc.errors():
+		field_path = ".".join(str(part) for part in error.get("loc", []))
+		print(f"- {field_path}: {error.get('msg', 'invalid value')}")
+	raise SystemExit(1)
+PY
+then
+	echo "Fix ${DEPLOY_DIR}/.env and run deploy again." >&2
+	exit 1
+fi
+
+echo "[4/6] Applying database migrations"
 cd "${DEPLOY_DIR}/backend"
 DATABASE_URL="${DATABASE_URL}" "${DEPLOY_DIR}/.venv/bin/alembic" upgrade head
 
-echo "[4/6] Updating frontend dependencies and building"
+echo "[5/6] Updating frontend dependencies and building"
 cd "${DEPLOY_DIR}/frontend"
 npm ci
 npm run build
 
-echo "[5/6] Restarting services"
+echo "[6/6] Restarting services"
 sudo systemctl restart loreforge-backend
 sudo systemctl restart loreforge-frontend
 sudo systemctl restart caddy
 
-echo "[6/6] Service status"
+echo "[7/7] Service status"
 sudo systemctl --no-pager --full status loreforge-backend | sed -n '1,12p'
 sudo systemctl --no-pager --full status loreforge-frontend | sed -n '1,12p'
 sudo systemctl --no-pager --full status caddy | sed -n '1,12p'
