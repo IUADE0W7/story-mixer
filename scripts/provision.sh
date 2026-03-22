@@ -1,116 +1,196 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-# ── Configuration ─────────────────────────────────────────────────────────────
-# Update REPO_URL before running on the server
-REPO_URL="https://github.com/YOUR_ORG/story-mixer.git"
-DEPLOY_DIR="/opt/loreforge"
-DEPLOY_USER="deploy"
+REPO_URL="${REPO_URL:-https://github.com/IUADE0W7/story-mixer}"
+DEPLOY_DIR="${DEPLOY_DIR:-/opt/loreforge}"
+DEPLOY_USER="${DEPLOY_USER:-deploy}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║     LoreForge Hetzner Provisioning Script            ║"
-echo "╚══════════════════════════════════════════════════════╝"
-echo ""
-echo "Running as: $(whoami) on $(hostname)"
-echo ""
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "Run this script as root (sudo)." >&2
+    exit 1
+fi
 
-# ── 1. System update ──────────────────────────────────────────────────────────
-echo "[1/7] Updating system packages..."
+echo "==============================================="
+echo " LoreForge Hetzner Provision (No Docker)"
+echo "==============================================="
+echo "Host: $(hostname)"
+echo "Repo: ${REPO_URL}"
+echo "Dir : ${DEPLOY_DIR}"
+echo "User: ${DEPLOY_USER}"
+echo
+
+echo "[1/11] Updating system packages"
+export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get upgrade -y
 
-# ── 2. Install Docker (official repo) ─────────────────────────────────────────
-echo "[2/7] Installing Docker..."
-if command -v docker &>/dev/null; then
-    echo "  Docker already installed: $(docker --version)"
-else
-    apt-get install -y ca-certificates curl
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-        -o /etc/apt/keyrings/docker.asc
-    chmod a+r /etc/apt/keyrings/docker.asc
-    echo \
-        "deb [arch=$(dpkg --print-architecture) \
-        signed-by=/etc/apt/keyrings/docker.asc] \
-        https://download.docker.com/linux/ubuntu \
-        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-        | tee /etc/apt/sources.list.d/docker.list >/dev/null
-    apt-get update -y
-    apt-get install -y \
-        docker-ce docker-ce-cli containerd.io \
-        docker-buildx-plugin docker-compose-plugin
-    echo "  Installed: $(docker --version)"
+echo "[2/11] Installing base dependencies"
+apt-get install -y \
+    ca-certificates \
+    curl \
+    git \
+    jq \
+    ufw \
+    postgresql \
+    postgresql-contrib \
+    python3 \
+    python3-venv \
+    python3-pip \
+    caddy \
+    fail2ban
+
+echo "[3/11] Installing Node.js 20"
+if ! command -v node >/dev/null 2>&1 || ! node -v | grep -qE '^v(2[0-9]|1[89])\.'; then
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
 fi
 
-systemctl enable docker
-systemctl start docker
+echo "Checking Python version"
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
+    echo "Python 3.12+ is required. Current version: $(python3 --version)" >&2
+    exit 1
+fi
 
-# ── 3. Install git and ufw ────────────────────────────────────────────────────
-echo "[3/7] Installing git and ufw..."
-apt-get install -y git ufw
-
-# ── 4. Configure UFW firewall ─────────────────────────────────────────────────
-echo "[4/7] Configuring UFW firewall..."
-# Set default policy BEFORE enabling to avoid open-firewall window
+echo "[4/11] Configuring firewall and fail2ban"
 ufw default deny incoming
 ufw default allow outgoing
-# Allow SSH BEFORE enabling or current session will drop
-ufw allow 22/tcp   comment 'SSH'
-ufw allow 80/tcp   comment 'HTTP'
-ufw allow 443/tcp  comment 'HTTPS'
+ufw allow 22/tcp comment 'SSH'
+ufw allow 80/tcp comment 'HTTP'
+ufw allow 443/tcp comment 'HTTPS'
 ufw --force enable
-echo "  Firewall status:"
-ufw status verbose
 
-# NOTE: Docker bypasses UFW by directly manipulating iptables.
-# Only Caddy exposes host ports (80, 443) in this setup — this is safe.
-# Do NOT add ports: mappings to backend, frontend, or postgres in docker-compose.yml.
+cat >/etc/fail2ban/jail.d/sshd.local <<'EOF'
+[sshd]
+enabled = true
+port = ssh
+maxretry = 5
+bantime = 1h
+findtime = 10m
+EOF
+systemctl enable fail2ban
+systemctl restart fail2ban
 
-# ── 5. Create deploy user ─────────────────────────────────────────────────────
-echo "[5/7] Creating deploy user..."
-if id "$DEPLOY_USER" &>/dev/null; then
-    echo "  User '$DEPLOY_USER' already exists."
-else
-    useradd -m -s /bin/bash "$DEPLOY_USER"
-    echo "  Created user: $DEPLOY_USER"
+echo "[5/11] Creating deploy user"
+if ! id "${DEPLOY_USER}" >/dev/null 2>&1; then
+    useradd -m -s /bin/bash "${DEPLOY_USER}"
 fi
-usermod -aG docker "$DEPLOY_USER"
-echo "  '$DEPLOY_USER' added to docker group."
 
-# ── 6. Clone repository ───────────────────────────────────────────────────────
-echo "[6/7] Setting up repository at $DEPLOY_DIR..."
-if [ -d "$DEPLOY_DIR/.git" ]; then
-    echo "  Repository already exists, skipping clone."
+echo "[6/11] Cloning/updating repository"
+if [[ -d "${DEPLOY_DIR}/.git" ]]; then
+    git -C "${DEPLOY_DIR}" fetch --all --prune
+    git -C "${DEPLOY_DIR}" checkout "${DEPLOY_BRANCH}"
+    git -C "${DEPLOY_DIR}" pull --ff-only origin "${DEPLOY_BRANCH}"
 else
-    # For private repos: set up an SSH deploy key or GitHub PAT before this step.
-    # See: https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys
-    git clone "$REPO_URL" "$DEPLOY_DIR"
+    git clone --branch "${DEPLOY_BRANCH}" "${REPO_URL}" "${DEPLOY_DIR}"
 fi
-chown -R "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_DIR"
+chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${DEPLOY_DIR}"
 
-# ── 7. Print next steps ───────────────────────────────────────────────────────
-echo ""
-echo "[7/7] Provisioning complete!"
-echo ""
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║                   NEXT STEPS                        ║"
-echo "╚══════════════════════════════════════════════════════╝"
-echo ""
-echo "1. Create the .env file:"
-echo "   cp $DEPLOY_DIR/.env.production.example $DEPLOY_DIR/.env"
-echo "   chmod 600 $DEPLOY_DIR/.env"
-echo "   chown $DEPLOY_USER:$DEPLOY_USER $DEPLOY_DIR/.env"
-echo ""
-echo "2. Edit $DEPLOY_DIR/.env and set:"
-echo "   DOMAIN=your-registered-domain.com"
-echo "   POSTGRES_PASSWORD=a_secure_alphanumeric_password"
-echo "   XAI_API_KEY=your_xai_api_key"
-echo ""
-echo "3. Point your domain's DNS A record to this server's IP:"
-echo "   $(curl -s ifconfig.me 2>/dev/null || echo '<run: curl ifconfig.me>')"
-echo ""
-echo "4. Run the first deployment:"
-echo "   su - $DEPLOY_USER -c 'cd $DEPLOY_DIR && bash scripts/deploy.sh'"
-echo ""
-echo "Caddy will obtain a TLS certificate automatically on first request."
+echo "[7/11] Preparing environment file"
+if [[ ! -f "${DEPLOY_DIR}/.env" ]]; then
+    cp "${DEPLOY_DIR}/.env.production.example" "${DEPLOY_DIR}/.env"
+fi
+chown "${DEPLOY_USER}:${DEPLOY_USER}" "${DEPLOY_DIR}/.env"
+chmod 600 "${DEPLOY_DIR}/.env"
+
+# shellcheck disable=SC1090
+source "${DEPLOY_DIR}/.env"
+
+POSTGRES_USER="${POSTGRES_USER:-loreforge}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-changeme}"
+POSTGRES_DB="${POSTGRES_DB:-loreforge}"
+DOMAIN="${DOMAIN:-yourdomain.com}"
+DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
+
+echo "[8/11] Configuring PostgreSQL"
+systemctl enable postgresql
+systemctl start postgresql
+
+sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${POSTGRES_USER}'" | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE ROLE ${POSTGRES_USER} LOGIN PASSWORD '${POSTGRES_PASSWORD}';"
+sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1 || \
+    sudo -u postgres createdb -O "${POSTGRES_USER}" "${POSTGRES_DB}"
+
+echo "[9/11] Installing app dependencies"
+su - "${DEPLOY_USER}" -c "cd '${DEPLOY_DIR}' && python3 -m venv .venv"
+su - "${DEPLOY_USER}" -c "cd '${DEPLOY_DIR}' && . .venv/bin/activate && pip install --upgrade pip && pip install -e backend"
+su - "${DEPLOY_USER}" -c "cd '${DEPLOY_DIR}/frontend' && npm ci && npm run build"
+
+echo "[10/11] Creating systemd services"
+cat >/etc/systemd/system/loreforge-backend.service <<EOF
+[Unit]
+Description=LoreForge Backend (FastAPI)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+WorkingDirectory=${DEPLOY_DIR}/backend
+ExecStart=/bin/bash -lc 'set -a; source ${DEPLOY_DIR}/.env; set +a; export DATABASE_URL=${DATABASE_URL}; exec ${DEPLOY_DIR}/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/loreforge-frontend.service <<EOF
+[Unit]
+Description=LoreForge Frontend (Next.js)
+After=network.target loreforge-backend.service
+
+[Service]
+Type=simple
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+WorkingDirectory=${DEPLOY_DIR}/frontend
+Environment=NODE_ENV=production
+Environment=BACKEND_URL=http://127.0.0.1:8000
+ExecStart=/usr/bin/npm run start -- --hostname 127.0.0.1 --port 3000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+if [[ "${DOMAIN}" == "yourdomain.com" || -z "${DOMAIN}" ]]; then
+    cat >/etc/caddy/Caddyfile <<'EOF'
+:80 {
+    reverse_proxy /api/v1/* 127.0.0.1:8000
+    reverse_proxy * 127.0.0.1:3000
+}
+EOF
+else
+    cat >/etc/caddy/Caddyfile <<EOF
+${DOMAIN} {
+    reverse_proxy /api/v1/* 127.0.0.1:8000
+    reverse_proxy * 127.0.0.1:3000
+}
+EOF
+fi
+
+echo "[11/11] Enabling and starting services"
+cat >/etc/sudoers.d/loreforge-deploy <<EOF
+${DEPLOY_USER} ALL=(root) NOPASSWD:/usr/bin/systemctl restart loreforge-backend,/usr/bin/systemctl restart loreforge-frontend,/usr/bin/systemctl restart caddy,/usr/bin/systemctl status loreforge-backend,/usr/bin/systemctl status loreforge-frontend,/usr/bin/systemctl status caddy
+EOF
+chmod 440 /etc/sudoers.d/loreforge-deploy
+
+systemctl daemon-reload
+systemctl enable loreforge-backend loreforge-frontend caddy
+systemctl restart loreforge-backend loreforge-frontend caddy
+
+echo
+echo "Provisioning complete."
+echo
+echo "Next steps:"
+echo "1) Edit ${DEPLOY_DIR}/.env with real DOMAIN and API keys"
+echo "2) Point DNS A record for ${DOMAIN} to this server IP"
+echo "3) Deploy updates with: su - ${DEPLOY_USER} -c 'cd ${DEPLOY_DIR} && bash scripts/deploy.sh'"
+if [[ "${DOMAIN}" == "yourdomain.com" || -z "${DOMAIN}" ]]; then
+    echo "4) Set a real DOMAIN in ${DEPLOY_DIR}/.env and run: sudo systemctl restart caddy"
+fi
+echo
+echo "Caddy handles TLS issuance and automatic certificate renewal."
 

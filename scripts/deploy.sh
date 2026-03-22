@@ -1,36 +1,64 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-DEPLOY_DIR="/opt/loreforge"
+DEPLOY_DIR="${DEPLOY_DIR:-/opt/loreforge}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║           LoreForge Deploy                          ║"
-echo "╚══════════════════════════════════════════════════════╝"
-echo ""
+if [[ ! -d "${DEPLOY_DIR}/.git" ]]; then
+	echo "Missing git repository at ${DEPLOY_DIR}" >&2
+	exit 1
+fi
 
-cd "$DEPLOY_DIR"
+echo "==============================================="
+echo " LoreForge Deploy (No Docker)"
+echo "==============================================="
+echo "Dir   : ${DEPLOY_DIR}"
+echo "Branch: ${DEPLOY_BRANCH}"
+echo
 
-# ── 1. Pull latest code ───────────────────────────────────────────────────────
-echo "[1/4] Pulling latest code from main..."
-git pull origin main
+cd "${DEPLOY_DIR}"
 
-# ── 2. Refresh base images for image-based services ───────────────────────────
-echo "[2/4] Pulling latest caddy and postgres images..."
-docker compose pull caddy postgres
+echo "[1/6] Pulling latest code"
+git fetch origin "${DEPLOY_BRANCH}"
+git checkout "${DEPLOY_BRANCH}"
+git pull --ff-only origin "${DEPLOY_BRANCH}"
 
-# ── 3. Rebuild built services with fresh base images, then start ──────────────
-echo "[3/4] Building backend and frontend (with base image refresh)..."
-docker compose build --pull backend frontend
+if [[ ! -f "${DEPLOY_DIR}/.env" ]]; then
+	echo "Missing ${DEPLOY_DIR}/.env" >&2
+	exit 1
+fi
 
-echo "      Starting all services..."
-docker compose up -d
+# shellcheck disable=SC1090
+source "${DEPLOY_DIR}/.env"
+POSTGRES_USER="${POSTGRES_USER:-loreforge}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-changeme}"
+POSTGRES_DB="${POSTGRES_DB:-loreforge}"
+DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}"
 
-# ── 4. Show status ────────────────────────────────────────────────────────────
-echo "[4/4] Service status:"
-docker compose ps
+echo "[2/6] Updating backend dependencies"
+. "${DEPLOY_DIR}/.venv/bin/activate"
+pip install --upgrade pip
+pip install -e backend
 
-echo ""
-echo "╔══════════════════════════════════════════════════════╗"
-echo "║              Deploy complete!                       ║"
-echo "╚══════════════════════════════════════════════════════╝"
+echo "[3/6] Applying database migrations"
+cd "${DEPLOY_DIR}/backend"
+DATABASE_URL="${DATABASE_URL}" "${DEPLOY_DIR}/.venv/bin/alembic" upgrade head
+
+echo "[4/6] Updating frontend dependencies and building"
+cd "${DEPLOY_DIR}/frontend"
+npm ci
+npm run build
+
+echo "[5/6] Restarting services"
+sudo systemctl restart loreforge-backend
+sudo systemctl restart loreforge-frontend
+sudo systemctl restart caddy
+
+echo "[6/6] Service status"
+sudo systemctl --no-pager --full status loreforge-backend | sed -n '1,12p'
+sudo systemctl --no-pager --full status loreforge-frontend | sed -n '1,12p'
+sudo systemctl --no-pager --full status caddy | sed -n '1,12p'
+
+echo
+echo "Deploy complete."
 

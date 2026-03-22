@@ -55,13 +55,6 @@ npm run dev
 
 Quick validation and checks
 
-- Run the repository helper script that checks Ollama CLI and API reachability from the environment: `check_ollama.sh`
-
-```bash
-chmod +x check_ollama.sh
-./check_ollama.sh
-```
-
 - Test the long-form generation endpoint against the running backend:
 
 ```bash
