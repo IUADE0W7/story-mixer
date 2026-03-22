@@ -3,6 +3,7 @@ set -euo pipefail
 
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/loreforge}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+DEPLOY_USER="${DEPLOY_USER:-deploy}"
 
 if [[ ! -d "${DEPLOY_DIR}/.git" ]]; then
 	echo "Missing git repository at ${DEPLOY_DIR}" >&2
