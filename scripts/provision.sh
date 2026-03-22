@@ -111,6 +111,18 @@ PY
     printf '\nJWT_SECRET=%s\n' "${GENERATED_JWT_SECRET}" >>"${DEPLOY_DIR}/.env"
 fi
 
+# Ensure Google OAuth client IDs exist in the env file. If missing, add placeholders.
+if ! grep -q '^GOOGLE_CLIENT_ID=' "${DEPLOY_DIR}/.env"; then
+    printf '\n# Google OAuth client IDs (set via Google Cloud Console)\nGOOGLE_CLIENT_ID=\nNEXT_PUBLIC_GOOGLE_CLIENT_ID=\n' >>"${DEPLOY_DIR}/.env"
+else
+    # If GOOGLE_CLIENT_ID is present but NEXT_PUBLIC_GOOGLE_CLIENT_ID is missing,
+    # propagate the value so frontend has access, unless it's explicitly set.
+    if ! grep -q '^NEXT_PUBLIC_GOOGLE_CLIENT_ID=' "${DEPLOY_DIR}/.env"; then
+        GOOGLE_VAL=$(grep -E '^GOOGLE_CLIENT_ID=' "${DEPLOY_DIR}/.env" | sed -E 's/^GOOGLE_CLIENT_ID=//')
+        printf '\nNEXT_PUBLIC_GOOGLE_CLIENT_ID=%s\n' "${GOOGLE_VAL}" >>"${DEPLOY_DIR}/.env"
+    fi
+fi
+
 echo "[8/11] Configuring PostgreSQL"
 systemctl enable postgresql
 systemctl start postgresql
@@ -206,7 +218,7 @@ echo
 echo "Provisioning complete."
 echo
 echo "Next steps:"
-echo "1) Edit ${DEPLOY_DIR}/.env with real DOMAIN and API keys"
+echo "1) Edit ${DEPLOY_DIR}/.env with real DOMAIN, API keys and Google OAuth client IDs (GOOGLE_CLIENT_ID and NEXT_PUBLIC_GOOGLE_CLIENT_ID)"
 echo "2) Point DNS A record for ${DOMAIN} to this server IP"
 echo "3) Deploy updates with: su - ${DEPLOY_USER} -c 'cd ${DEPLOY_DIR} && bash scripts/deploy.sh'"
 if [[ "${DOMAIN}" == "yourdomain.com" || -z "${DOMAIN}" ]]; then

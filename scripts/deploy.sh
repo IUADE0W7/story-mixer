@@ -40,6 +40,13 @@ if [[ -z "${JWT_SECRET:-}" ]]; then
 	exit 1
 fi
 
+# Ensure Google OAuth client IDs are present
+if [[ -z "${GOOGLE_CLIENT_ID:-}" || -z "${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}" ]]; then
+	echo "Missing Google OAuth client IDs in ${DEPLOY_DIR}/.env" >&2
+	echo "Please set GOOGLE_CLIENT_ID and NEXT_PUBLIC_GOOGLE_CLIENT_ID in ${DEPLOY_DIR}/.env and run deploy again." >&2
+	exit 1
+fi
+
 POSTGRES_USER="${POSTGRES_USER:-loreforge}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-changeme}"
 POSTGRES_DB="${POSTGRES_DB:-loreforge}"
