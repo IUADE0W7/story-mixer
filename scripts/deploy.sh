@@ -141,6 +141,23 @@ UNIT"
 	sudo systemctl daemon-reload
 fi
 
+# Update Caddyfile if DOMAIN is set to a real domain
+if [[ -n "${DOMAIN:-}" && "${DOMAIN}" != "yourdomain.com" ]]; then
+	echo "[6.2] Updating /etc/caddy/Caddyfile for ${DOMAIN}"
+	sudo bash -c "cat >/etc/caddy/Caddyfile <<EOF
+${DOMAIN} {
+	reverse_proxy /api/v1/* 127.0.0.1:8000
+	reverse_proxy * 127.0.0.1:3000
+}
+EOF"
+	echo "Validating Caddyfile"
+	if ! sudo caddy validate --config /etc/caddy/Caddyfile; then
+		echo "Caddyfile validation failed" >&2
+		exit 1
+	fi
+	sudo systemctl restart caddy
+fi
+
 echo "[7/7] Restarting services"
 sudo systemctl restart loreforge-backend
 sudo systemctl restart loreforge-frontend
