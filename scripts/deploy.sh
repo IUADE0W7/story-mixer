@@ -143,7 +143,8 @@ echo "[6.2] Creating frontend release ${RELEASE_DIR}"
 mkdir -p "${RELEASE_DIR}"
 # Copy frontend sources and built artifacts (exclude node_modules and .git)
 if command -v rsync >/dev/null 2>&1; then
-	rsync -a --delete --exclude='.git' --exclude='node_modules' "${DEPLOY_DIR}/frontend/" "${RELEASE_DIR}/frontend/"
+	# Exclude only top-level node_modules so standalone runtime deps are preserved.
+	rsync -a --delete --exclude='/.git' --exclude='/node_modules' "${DEPLOY_DIR}/frontend/" "${RELEASE_DIR}/frontend/"
 else
 	echo "rsync not found; falling back to cp for release copy"
 	mkdir -p "${RELEASE_DIR}/frontend"
@@ -154,9 +155,16 @@ fi
 ln -sfn "${RELEASE_DIR}/frontend" "${DEPLOY_DIR}/frontend_current"
 echo "[6.3] Frontend symlinked to ${DEPLOY_DIR}/frontend_current"
 
+# Keep only the newest 5 releases to avoid unbounded disk growth.
+if [[ -d "${DEPLOY_DIR}/releases" ]]; then
+	echo "[6.3.1] Pruning old frontend releases (keep 5)"
+	ls -1dt "${DEPLOY_DIR}/releases"/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+fi
+
 # If Next.js produced a standalone build, update the systemd unit to start the standalone server
-echo "[6.4] Updating systemd unit to use frontend_current"
-sudo bash -c "cat >/etc/systemd/system/loreforge-frontend.service <<'UNIT'
+echo "[6.4] Ensuring systemd unit uses frontend_current"
+if [[ "${EUID}" -eq 0 ]] || sudo -n true >/dev/null 2>&1; then
+	sudo bash -c "cat >/etc/systemd/system/loreforge-frontend.service <<'UNIT'
 [Unit]
 Description=LoreForge Frontend (Next.js)
 After=network.target loreforge-backend.service
@@ -175,13 +183,17 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT"
-sudo systemctl daemon-reload
+	sudo systemctl daemon-reload
+else
+	echo "Skipping systemd unit rewrite (sudo without password not available)."
+fi
 
 
 # Update Caddyfile if DOMAIN is set to a real domain
 if [[ -n "${DOMAIN:-}" && "${DOMAIN}" != "yourdomain.com" ]]; then
-	echo "[6.2] Updating /etc/caddy/Caddyfile for ${DOMAIN}"
-	sudo bash -c "cat >/etc/caddy/Caddyfile <<EOF
+    if [[ "${EUID}" -eq 0 ]] || sudo -n true >/dev/null 2>&1; then
+		echo "[6.2] Updating /etc/caddy/Caddyfile for ${DOMAIN}"
+		sudo bash -c "cat >/etc/caddy/Caddyfile <<EOF
 ${DOMAIN} {
 	# API
 	reverse_proxy /api/v1/* 127.0.0.1:8000
@@ -201,12 +213,15 @@ ${DOMAIN} {
 	header @root Cache-Control \"public, max-age=60\"
 }
 EOF"
-	echo "Validating Caddyfile"
-	if ! sudo caddy validate --config /etc/caddy/Caddyfile; then
-		echo "Caddyfile validation failed" >&2
-		exit 1
-	fi
-	sudo systemctl restart caddy
+		echo "Validating Caddyfile"
+		if ! sudo caddy validate --config /etc/caddy/Caddyfile; then
+			echo "Caddyfile validation failed" >&2
+			exit 1
+		fi
+		sudo systemctl restart caddy
+    else
+		echo "Skipping Caddyfile rewrite (sudo without password not available)."
+    fi
 fi
 
 echo "[7/7] Restarting services"
