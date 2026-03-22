@@ -34,6 +34,10 @@ set -a
 source "${DEPLOY_DIR}/.env"
 set +a
 
+can_sudo_systemctl() {
+	[[ "${EUID}" -eq 0 ]] || sudo -n /usr/bin/systemctl status caddy >/dev/null 2>&1
+}
+
 if [[ -z "${JWT_SECRET:-}" ]]; then
 	echo "Missing JWT_SECRET in ${DEPLOY_DIR}/.env" >&2
 	echo "Set JWT_SECRET and run deploy again." >&2
@@ -191,48 +195,70 @@ fi
 
 # Update Caddyfile if DOMAIN is set to a real domain
 if [[ -n "${DOMAIN:-}" && "${DOMAIN}" != "yourdomain.com" ]]; then
-    if [[ "${EUID}" -eq 0 ]] || sudo -n true >/dev/null 2>&1; then
+    if [[ "${EUID}" -eq 0 ]]; then
 		echo "[6.2] Updating /etc/caddy/Caddyfile for ${DOMAIN}"
-		sudo bash -c "cat >/etc/caddy/Caddyfile <<EOF
+		cat >/etc/caddy/Caddyfile <<EOF
 ${DOMAIN} {
 	# API
 	reverse_proxy /api/v1/* 127.0.0.1:8000
 
+	# Cache headers for Next.js hashed assets. Remove upstream cache header first
+	# so only one Cache-Control header is sent.
+	handle /_next/static/* {
+		reverse_proxy 127.0.0.1:3000 {
+			header_down -Cache-Control
+		}
+		header Cache-Control "public, max-age=31536000, immutable"
+	}
+
 	# Frontend
 	reverse_proxy * 127.0.0.1:3000
-
-	# Cache headers for Next.js hashed assets
-	@nextstatic path /_next/static/*
-	header @nextstatic Cache-Control \"public, max-age=31536000, immutable\"
-
-	@nextchunks path /_next/static/chunks/*
-	header @nextchunks Cache-Control \"public, max-age=31536000, immutable\"
-
-	# Keep HTML short-lived so clients pick up new builds quickly
-	@root path /
-	header @root Cache-Control \"public, max-age=60\"
 }
-EOF"
+EOF
 		echo "Validating Caddyfile"
-		if ! sudo caddy validate --config /etc/caddy/Caddyfile; then
+		if ! caddy validate --config /etc/caddy/Caddyfile; then
 			echo "Caddyfile validation failed" >&2
 			exit 1
 		fi
-		sudo systemctl restart caddy
+		systemctl restart caddy
     else
-		echo "Skipping Caddyfile rewrite (sudo without password not available)."
+		echo "Skipping Caddyfile rewrite (requires root to write /etc/caddy/Caddyfile)."
     fi
 fi
 
 echo "[7/7] Restarting services"
-sudo systemctl restart loreforge-backend
-sudo systemctl restart loreforge-frontend
-sudo systemctl restart caddy
+if can_sudo_systemctl; then
+	sudo systemctl restart loreforge-backend
+	sudo systemctl restart loreforge-frontend
+	sudo systemctl restart caddy
+else
+	echo "Unable to restart services: run as root or grant deploy NOPASSWD for systemctl." >&2
+	exit 1
+fi
 
 echo "Service status"
 sudo systemctl --no-pager --full status loreforge-backend | sed -n '1,12p'
 sudo systemctl --no-pager --full status loreforge-frontend | sed -n '1,12p'
 sudo systemctl --no-pager --full status caddy | sed -n '1,12p'
+
+echo "Running post-deploy HTTP checks"
+if [[ -n "${DOMAIN:-}" && "${DOMAIN}" != "yourdomain.com" ]]; then
+	BASE_URL="https://${DOMAIN}"
+else
+	BASE_URL="http://127.0.0.1:3000"
+fi
+
+HOME_HEADERS="$(curl -fsSI "${BASE_URL}/")"
+echo "${HOME_HEADERS}" | sed -n '1,10p'
+
+CHUNK_NAME="$(curl -fsS "${BASE_URL}/" | grep -Eo 'layout-[a-f0-9]+\.js' | head -n1 || true)"
+if [[ -z "${CHUNK_NAME}" ]]; then
+	echo "Post-deploy check failed: could not find layout chunk in homepage HTML" >&2
+	exit 1
+fi
+
+echo "Found layout chunk: ${CHUNK_NAME}"
+curl -fsSI "${BASE_URL}/_next/static/chunks/app/${CHUNK_NAME}" | sed -n '1,12p'
 
 echo
 echo "Deploy complete."

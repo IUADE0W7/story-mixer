@@ -192,7 +192,18 @@ EOF
 if [[ "${DOMAIN}" == "yourdomain.com" || -z "${DOMAIN}" ]]; then
     cat >/etc/caddy/Caddyfile <<'EOF'
 :80 {
+    # API
     reverse_proxy /api/v1/* 127.0.0.1:8000
+
+    # Static assets: force single immutable Cache-Control header.
+    handle /_next/static/* {
+        reverse_proxy 127.0.0.1:3000 {
+            header_down -Cache-Control
+        }
+        header Cache-Control "public, max-age=31536000, immutable"
+    }
+
+    # Frontend
     reverse_proxy * 127.0.0.1:3000
 }
 EOF
@@ -202,25 +213,23 @@ ${DOMAIN} {
     # API
     reverse_proxy /api/v1/* 127.0.0.1:8000
 
+    # Static assets: force single immutable Cache-Control header.
+    handle /_next/static/* {
+        reverse_proxy 127.0.0.1:3000 {
+            header_down -Cache-Control
+        }
+        header Cache-Control "public, max-age=31536000, immutable"
+    }
+
     # Frontend app
     reverse_proxy * 127.0.0.1:3000
-
-    # Cache headers: immutable hashed assets and short-lived HTML
-    @nextstatic path /_next/static/*
-    header @nextstatic Cache-Control "public, max-age=31536000, immutable"
-
-    @nextchunks path /_next/static/chunks/*
-    header @nextchunks Cache-Control "public, max-age=31536000, immutable"
-
-    @root path /
-    header @root Cache-Control "public, max-age=60"
 }
 EOF
 fi
 
 echo "[11/11] Enabling and starting services"
 cat >/etc/sudoers.d/loreforge-deploy <<EOF
-${DEPLOY_USER} ALL=(root) NOPASSWD:/usr/bin/systemctl restart loreforge-backend,/usr/bin/systemctl restart loreforge-frontend,/usr/bin/systemctl restart caddy,/usr/bin/systemctl status loreforge-backend,/usr/bin/systemctl status loreforge-frontend,/usr/bin/systemctl status caddy
+${DEPLOY_USER} ALL=(root) NOPASSWD:/usr/bin/systemctl *,/bin/systemctl *
 EOF
 chmod 440 /etc/sudoers.d/loreforge-deploy
 
