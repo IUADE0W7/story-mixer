@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { sel } from "./selectors";
 
 test.describe("Auth modal — Google Sign-In", () => {
   test.beforeEach(async ({ page }) => {
@@ -45,6 +46,13 @@ test.describe("Auth modal — Google Sign-In", () => {
 });
 
 test.describe("Rate limit message", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("lf_token", "fake.jwt.token");
+      localStorage.setItem("loreforge.language", "en");
+    });
+  });
+
   test("shows 'Limit reached' message on 429 response", async ({ page }) => {
     await page.route("**/api/v1/stories/generate-long-form", async (route) => {
       await route.fulfill({
@@ -60,12 +68,10 @@ test.describe("Rate limit message", () => {
 
     await page.goto("/");
     await page.waitForLoadState("domcontentloaded");
-    await page.evaluate(() => localStorage.setItem("lf_token", "fake.jwt.token"));
-    await page.reload();
-
-    // Adjust selector to the actual generate button text in VibeController
-    const generateBtn = page.getByRole("button", { name: /generate/i }).first();
-    await generateBtn.click();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await sel(page).sourceA.fill("Story seed A");
+    await sel(page).sourceB.fill("Story seed B");
+    await sel(page).forgeButton.click();
 
     await expect(
       page.getByText(/Limit reached\. Try again at/i)
@@ -83,11 +89,10 @@ test.describe("Rate limit message", () => {
 
     await page.goto("/");
     await page.waitForLoadState("domcontentloaded");
-    await page.evaluate(() => localStorage.setItem("lf_token", "expired.jwt.token"));
-    await page.reload();
-
-    const generateBtn = page.getByRole("button", { name: /generate/i }).first();
-    await generateBtn.click();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await sel(page).sourceA.fill("Story seed A");
+    await sel(page).sourceB.fill("Story seed B");
+    await sel(page).forgeButton.click();
 
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5000 });
   });

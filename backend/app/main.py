@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.deps import RateLimitExceeded
+from app.api.deps import AuthRateLimitExceeded, RateLimitExceeded
 from app.api.v1.auth import router as auth_router
 from app.api.v1.stories import router as stories_router
 from app.config import settings
@@ -68,6 +68,19 @@ def create_app() -> FastAPI:
             headers={"Retry-After": exc.retry_after.strftime("%a, %d %b %Y %H:%M:%S GMT")},
             content={
                 "detail": "Rate limit exceeded",
+                "retry_after": exc.retry_after.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        )
+
+    @app.exception_handler(AuthRateLimitExceeded)
+    async def _auth_rate_limit_handler(
+        request: Request, exc: AuthRateLimitExceeded
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": exc.retry_after.strftime("%a, %d %b %Y %H:%M:%S GMT")},
+            content={
+                "detail": "Too many authentication attempts",
                 "retry_after": exc.retry_after.strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
         )

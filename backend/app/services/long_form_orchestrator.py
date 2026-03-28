@@ -8,6 +8,8 @@ import time
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
+import httpx
+
 from app.domain.long_form_contracts import (
     ChapterOutline,
     ChapterResult,
@@ -15,10 +17,17 @@ from app.domain.long_form_contracts import (
     LongFormResult,
 )
 from app.domain.vibe_models import CalibrationProfile
-from app.services.contracts import LLMGateway, PromptEnvelope
-from app.services.outline_agent import LocalOutlineAgent, StructuredOutlineAgent
+from app.services.contracts import LLMGateway, OutlineAgent, PromptEnvelope
 
 logger = logging.getLogger(__name__)
+
+PIPELINE_FAILURES = (
+    RuntimeError,
+    ValueError,
+    TypeError,
+    OSError,
+    httpx.HTTPError,
+)
 
 # ── SSE event keys ────────────────────────────────────────────────────────────
 _EV_STATUS           = "status"
@@ -125,7 +134,7 @@ class LongFormOrchestrator:
     def __init__(
         self,
         llm_gateway: LLMGateway,
-        outline_agent: LocalOutlineAgent | StructuredOutlineAgent,
+        outline_agent: OutlineAgent,
     ) -> None:
         self._llm_gateway   = llm_gateway
         self._outline_agent = outline_agent
@@ -145,10 +154,17 @@ class LongFormOrchestrator:
 
         try:
             outline = await self._outline_agent.generate_outline(request, calibration)
-        except Exception as exc:
+        except PIPELINE_FAILURES:
             logger.exception("Outline generation failed")
-            yield _log(request_id, "OutlineAgent", "Orchestrator", f"Outline generation failed: {exc}", level="error")
-            yield _evt(_EV_ERROR, request_id, {"error": "outline_failed", "detail": str(exc)})
+            yield _log(request_id, "OutlineAgent", "Orchestrator", "Outline generation failed", level="error")
+            yield _evt(
+                _EV_ERROR,
+                request_id,
+                {
+                    "error": "outline_failed",
+                    "user_message": "Outline generation failed. Please retry.",
+                },
+            )
             return
 
         # Trim/pad to requested chapter count
@@ -194,13 +210,19 @@ class LongFormOrchestrator:
                         "chapter": chapter_outline.number,
                         "text": chunk.text,
                     })
-            except Exception as exc:
+            except PIPELINE_FAILURES:
                 logger.exception("Chapter %d write failed", chapter_outline.number)
-                yield _log(request_id, "LLM", "Orchestrator", f"Chapter {chapter_outline.number} write failed: {exc}", level="error")
+                yield _log(
+                    request_id,
+                    "LLM",
+                    "Orchestrator",
+                    f"Chapter {chapter_outline.number} write failed",
+                    level="error",
+                )
                 yield _evt(_EV_ERROR, request_id, {
                     "error": "chapter_write_failed",
                     "chapter": chapter_outline.number,
-                    "detail": str(exc),
+                    "user_message": "Chapter generation failed. Please retry.",
                 })
                 return
 

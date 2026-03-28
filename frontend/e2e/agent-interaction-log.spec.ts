@@ -18,6 +18,20 @@ interface LogEntry {
   level?: string;
 }
 
+function logToggle(page: Page) {
+  return page.locator('button[aria-controls="agent-log-body"]');
+}
+
+async function gotoStudio(page: Page): Promise<void> {
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.setItem("lf_token", "e2e.fake.token");
+    localStorage.setItem("loreforge.language", "en");
+  });
+  await page.reload();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+}
+
 /** Build a minimal long-form SSE body that includes log events. */
 function mockSseWithLogs(logEntries: LogEntry[]): string {
   const frames: string[] = [];
@@ -74,19 +88,19 @@ const SAMPLE_LOGS: LogEntry[] = [
 
 test.describe("Agent Interaction Log — panel presence", () => {
   test("panel header is visible on the page before any generation", async ({ page }) => {
-    await page.goto("/");
-    await expect(page.getByText("Agent Interaction Log")).toBeVisible();
+    await gotoStudio(page);
+    await expect(logToggle(page)).toBeVisible();
   });
 
   test("panel is collapsed by default (log body not visible)", async ({ page }) => {
-    await page.goto("/");
+    await gotoStudio(page);
     const body = page.locator("#agent-log-body");
     await expect(body).not.toBeVisible();
   });
 
   test("panel header button has aria-expanded=false when collapsed", async ({ page }) => {
-    await page.goto("/");
-    const toggleBtn = page.getByRole("button", { name: /agent interaction log/i });
+    await gotoStudio(page);
+    const toggleBtn = logToggle(page);
     await expect(toggleBtn).toHaveAttribute("aria-expanded", "false");
   });
 });
@@ -97,21 +111,21 @@ test.describe("Agent Interaction Log — panel presence", () => {
 
 test.describe("Agent Interaction Log — expand / collapse", () => {
   test("clicking the header expands the panel", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("button", { name: /agent interaction log/i }).click();
+    await gotoStudio(page);
+    await logToggle(page).click();
     await expect(page.locator("#agent-log-body")).toBeVisible();
   });
 
   test("aria-expanded becomes true after opening", async ({ page }) => {
-    await page.goto("/");
-    const btn = page.getByRole("button", { name: /agent interaction log/i });
+    await gotoStudio(page);
+    const btn = logToggle(page);
     await btn.click();
     await expect(btn).toHaveAttribute("aria-expanded", "true");
   });
 
   test("clicking the header again collapses the panel", async ({ page }) => {
-    await page.goto("/");
-    const btn = page.getByRole("button", { name: /agent interaction log/i });
+    await gotoStudio(page);
+    const btn = logToggle(page);
     await btn.click();
     await expect(page.locator("#agent-log-body")).toBeVisible();
     await btn.click();
@@ -119,8 +133,8 @@ test.describe("Agent Interaction Log — expand / collapse", () => {
   });
 
   test("empty state message is shown when panel is open but no entries yet", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("button", { name: /agent interaction log/i }).click();
+    await gotoStudio(page);
+    await logToggle(page).click();
     await expect(
       page.getByText(/no interactions recorded yet/i),
     ).toBeVisible();
@@ -136,14 +150,16 @@ test.describe("Agent Interaction Log — entries after generation", () => {
     await interceptWithLogs(page, SAMPLE_LOGS);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await s.sourceA.fill("Story seed A");
+    await s.sourceB.fill("Story seed B");
     await s.storyBrief.fill("A traveller arrives at a crossroads.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
 
     // The badge shows the count of log entries
     await expect(
-      page.getByText(String(SAMPLE_LOGS.length)),
+      logToggle(page).getByText(String(SAMPLE_LOGS.length), { exact: true }),
     ).toBeVisible();
   });
 
@@ -151,12 +167,14 @@ test.describe("Agent Interaction Log — entries after generation", () => {
     await interceptWithLogs(page, SAMPLE_LOGS);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await s.sourceA.fill("Story seed A");
+    await s.sourceB.fill("Story seed B");
     await s.storyBrief.fill("A traveller arrives at a crossroads.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
 
-    await page.getByRole("button", { name: /agent interaction log/i }).click();
+    await logToggle(page).click();
 
     // At least one "Orchestrator" agent badge should be visible
     await expect(page.getByText("Orchestrator").first()).toBeVisible();
@@ -168,12 +186,14 @@ test.describe("Agent Interaction Log — entries after generation", () => {
     ]);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await s.sourceA.fill("Story seed A");
+    await s.sourceB.fill("Story seed B");
     await s.storyBrief.fill("A crossroads scene.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
 
-    await page.getByRole("button", { name: /agent interaction log/i }).click();
+    await logToggle(page).click();
 
     await expect(page.getByText("Orchestrator")).toBeVisible();
     await expect(page.getByText("Critic")).toBeVisible();
@@ -186,12 +206,14 @@ test.describe("Agent Interaction Log — entries after generation", () => {
     ]);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await s.sourceA.fill("Story seed A");
+    await s.sourceB.fill("Story seed B");
     await s.storyBrief.fill("A crossroads scene.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
 
-    await page.getByRole("button", { name: /agent interaction log/i }).click();
+    await logToggle(page).click();
     await expect(page.getByText(uniqueMessage)).toBeVisible();
   });
 
@@ -204,12 +226,14 @@ test.describe("Agent Interaction Log — entries after generation", () => {
     await interceptWithLogs(page, entries);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await s.sourceA.fill("Story seed A");
+    await s.sourceB.fill("Story seed B");
     await s.storyBrief.fill("A crossroads scene.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
 
-    await page.getByRole("button", { name: /agent interaction log/i }).click();
+    await logToggle(page).click();
 
     for (const entry of entries) {
       await expect(page.getByText(entry.message)).toBeVisible();
@@ -236,7 +260,9 @@ test.describe("Agent Interaction Log — entries after generation", () => {
     });
 
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
+    await s.sourceA.fill("Story seed A");
+    await s.sourceB.fill("Story seed B");
     await s.storyBrief.fill("First story.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
@@ -245,7 +271,7 @@ test.describe("Agent Interaction Log — entries after generation", () => {
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
 
-    await page.getByRole("button", { name: /agent interaction log/i }).click();
+    await logToggle(page).click();
 
     // The first generation's log should not be visible; second generation's should
     await expect(page.getByText("Second generation log")).toBeVisible();
@@ -268,15 +294,17 @@ test.describe("Agent Interaction Log — OutlineAgent entries", () => {
     await interceptWithLogs(page, logEntries);
 
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
+    await s.sourceA.fill("Story seed A");
+    await s.sourceB.fill("Story seed B");
 
     await s.storyBrief.fill("A spy story in two chapters.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
 
-    await page.getByRole("button", { name: /agent interaction log/i }).click();
+    await logToggle(page).click();
 
-    await expect(page.getByText("OutlineAgent")).toBeVisible();
+    await expect(page.getByText("OutlineAgent").first()).toBeVisible();
     await expect(page.getByText("Outline ready: 2 chapters")).toBeVisible();
   });
 });

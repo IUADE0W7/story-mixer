@@ -69,7 +69,7 @@ class AppSettings(BaseSettings):
     anthropic_api_key: str | None = None
     google_api_key: str | None = None
     xai_api_key: str | None = None
-    google_client_id: str = "279437916052-v4epiabem96dmc9m15ils4t9m2b7988a.apps.googleusercontent.com"
+    google_client_id: str = Field(min_length=1)
     ollama_base_url: str = Field(default_factory=_default_ollama_base_url)
     # LLM provider selection — overrideable via environment variables
     llm_provider: str = "ollama"
@@ -80,6 +80,8 @@ class AppSettings(BaseSettings):
     jwt_secret: str
     jwt_expiry_hours: int = 24
     rate_limit_per_hour: int = 10
+    auth_rate_limit_max_attempts: int = 5
+    auth_rate_limit_window_seconds: int = 60
 
 
 settings = AppSettings()

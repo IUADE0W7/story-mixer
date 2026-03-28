@@ -17,6 +17,7 @@ from app.services.rate_limit_service import check_rate_limit_and_record
 def _make_session(user_found: bool, count: int, earliest: datetime | None = None, limit: int = 10) -> AsyncMock:
     """Build a mock AsyncSession for given scenario."""
     session = AsyncMock()
+    session.add = MagicMock()
 
     # First execute: SELECT FOR UPDATE → user row
     user_row = MagicMock() if user_found else None

@@ -41,3 +41,14 @@ class LLMGateway(Protocol):
         prompt: PromptEnvelope,
     ) -> str:
         """Return a non-streaming completion when streaming is disabled."""
+
+
+class OutlineAgent(Protocol):
+    """Outline generator used by the orchestration layer."""
+
+    async def generate_outline(
+        self,
+        request: object,
+        calibration: object,
+    ) -> list[object]:
+        """Return a structured chapter outline for the request."""

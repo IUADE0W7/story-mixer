@@ -8,6 +8,7 @@ export const sel = (page: Page) => ({
   forgeButton:     page.getByLabel("Forge narrative from current calibration"),
   storyBrief:      page.getByLabel("Custom story brief"),
   sourceA:         page.getByLabel("First source tale"),
+  sourceB:         page.getByLabel("Second source tale"),
   languageSelect:  page.getByLabel("Select story language"),
   modelName:       page.getByLabel(/^Model name$/),
   judgeModelName:  page.getByLabel(/^Judge model name$/),

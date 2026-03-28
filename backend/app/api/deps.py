@@ -6,12 +6,13 @@ import logging
 from datetime import datetime
 
 import jwt as pyjwt
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.persistence.db import get_session, session_factory
 from app.persistence.models import User
+from app.services.auth_rate_limit_service import auth_rate_limiter
 from app.services.auth_service import verify_token
 from app.services.rate_limit_service import check_rate_limit_and_record
 
@@ -23,6 +24,39 @@ class RateLimitExceeded(Exception):
 
     def __init__(self, retry_after: datetime) -> None:
         self.retry_after = retry_after
+
+
+class AuthRateLimitExceeded(Exception):
+    """Raised when a client exceeds the short-window auth attempt limit."""
+
+    def __init__(self, retry_after: datetime) -> None:
+        self.retry_after = retry_after
+
+
+def _auth_failure(detail: str) -> HTTPException:
+    """Return a normalized 401 error to avoid auth enumeration leaks."""
+
+    return HTTPException(status_code=401, detail=detail)
+
+
+async def check_auth_rate_limit(request: Request) -> None:
+    """Throttle repeated login attempts per client address using a short window."""
+
+    client_host = request.client.host if request.client is not None else "unknown"
+    retry_after = auth_rate_limiter.check(
+        bucket=client_host,
+        limit=settings.auth_rate_limit_max_attempts,
+        window_seconds=settings.auth_rate_limit_window_seconds,
+    )
+    if retry_after is None:
+        return
+
+    logger.warning(
+        "Auth rate limit exceeded for client=%s retry_after=%s",
+        client_host,
+        retry_after.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+    raise AuthRateLimitExceeded(retry_after)
 
 
 async def get_current_user(
@@ -38,17 +72,17 @@ async def get_current_user(
         payload = verify_token(token)
     except pyjwt.ExpiredSignatureError:
         logger.warning("Auth token expired")
-        raise HTTPException(status_code=401, detail="Token expired")
+        raise _auth_failure("Not authenticated")
     except pyjwt.InvalidTokenError:
         logger.warning("Auth token invalid")
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise _auth_failure("Not authenticated")
 
     user = await db.get(User, payload["user_id"])
     if user is None:
-        logger.warning("Auth token valid but user_id=%s not found in DB", payload["user_id"])
-        raise HTTPException(status_code=401, detail="User not found")
+        logger.warning("Auth token valid but user record was not found")
+        raise _auth_failure("Not authenticated")
 
-    logger.info("Auth token validated: user_id=%s email=%s", user.id, user.email)
+    logger.info("Auth token validated")
     return user
 
 
@@ -74,8 +108,7 @@ async def check_rate_limit(
         raise HTTPException(status_code=401, detail="User not found")
     if result is not None:
         logger.warning(
-            "Rate limit exceeded for user_id=%s retry_after=%s",
-            current_user.id,
+            "Generation rate limit exceeded retry_after=%s",
             result.strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         raise RateLimitExceeded(result)

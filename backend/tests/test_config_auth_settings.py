@@ -22,3 +22,12 @@ def test_rate_limit_per_hour_defaults_to_10() -> None:
     import app.config as cfg
     reload(cfg)
     assert cfg.settings.rate_limit_per_hour == 10
+
+
+def test_auth_rate_limit_defaults_are_declared() -> None:
+    from importlib import reload
+    import app.config as cfg
+
+    reload(cfg)
+    assert cfg.settings.auth_rate_limit_max_attempts == 5
+    assert cfg.settings.auth_rate_limit_window_seconds == 60

@@ -1,6 +1,6 @@
 # LoreForge Architecture
 
-LoreForge should keep HTTP transport, orchestration, and provider integration separate so the story engine can evolve without rewriting the API. The FastAPI application is responsible for validation, authentication, rate limiting, persistence coordination, and SSE transport. The orchestration layer owns prompt construction, provider routing, streaming token assembly, judge evaluation, and bounded revision loops.
+LoreForge should keep HTTP transport, orchestration, and provider integration separate so the story engine can evolve without rewriting the API. The FastAPI application is responsible for validation, authentication, rate limiting, persistence coordination, and SSE transport. The current backend implementation uses dependency-injected gateways and outline agents for story streaming, while judge evaluation and persistence of completed stories are still planned work rather than active runtime behavior.
 
 ## Layer Boundaries
 
@@ -26,8 +26,8 @@ React + shadcn/ui
 - Depends on typed protocols instead of provider SDK classes.
 - Builds prompts from a calibration profile rather than raw request JSON.
 - Supports streaming generation for long-form output.
-- Calls a separate judge model for structured metric verification.
-- Retries revisions with a hard cap to avoid infinite critique loops.
+- The current implementation streams outline generation and chapter writing only.
+- Judge evaluation and bounded revision loops remain target architecture, not implemented flow.
 
 ### Provider Layer
 
@@ -89,7 +89,6 @@ sequenceDiagram
     participant Orch as Story Orchestrator
     participant Prompt as Prompt Builder
     participant LLM as Provider Gateway
-    participant Judge as Critique Agent
     participant DB as PostgreSQL
 
     User->>UI: Adjust aggression, reader respect, morality, source fidelity (1–10 each)
@@ -108,26 +107,7 @@ sequenceDiagram
         UI-->>User: Render prose progressively
     end
 
-    Orch->>Judge: evaluate(draft, request, calibration)
-    Judge-->>Orch: JudgeEvaluation JSON
-
-    alt Judge passes
-        Orch->>DB: save_generation(request, result)
-        Orch-->>API: complete event
-        API-->>UI: SSE complete event
-        UI-->>User: Show story and calibration report
-    else Judge fails and retries remain
-        Orch-->>API: warning event
-        API-->>UI: SSE warning event
-        Orch->>Prompt: build_revision_prompt(request, draft, judge, calibration)
-        Prompt-->>Orch: PromptEnvelope
-        Orch->>LLM: generate_text(revision_prompt, provider)
-        LLM-->>Orch: revised draft
-        Orch->>Judge: evaluate(revised draft, request, calibration)
-    else Judge fails and retry limit reached
-        Orch->>DB: save_generation(request, low-confidence result)
-        Orch-->>API: complete event with low_confidence=true
-        API-->>UI: SSE complete event
-        UI-->>User: Show story with low-confidence badge
-    end
+    Orch-->>API: complete event
+    API-->>UI: SSE complete event
+    UI-->>User: Show story draft
 ```

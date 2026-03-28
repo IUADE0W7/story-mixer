@@ -12,7 +12,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.persistence.models import GenerationRequest, User
-from app.services.auth_service import issue_token
+from app.services.auth_service import InvalidGoogleCredentialError, issue_token
 
 pytestmark = pytest.mark.integration
 
@@ -89,16 +89,16 @@ async def test_google_login_upserts_existing_user(
 async def test_google_login_returns_401_on_invalid_credential(client: AsyncClient) -> None:
     with patch(
         "app.api.v1.auth.verify_google_credential",
-        new=AsyncMock(side_effect=ValueError("Token is expired")),
+        new=AsyncMock(side_effect=InvalidGoogleCredentialError("Token is expired")),
     ):
         resp = await client.post("/api/v1/auth/google", json={"credential": "bad"})
     assert resp.status_code == 401
-    assert "Invalid Google credential" in resp.json()["detail"]
+    assert resp.json()["detail"] == "Authentication failed"
 
 
 @pytest.mark.asyncio
 async def test_google_login_returns_409_on_email_collision(client: AsyncClient) -> None:
-    """Same email, different google_id → 409."""
+    """Same email, different google_id returns a generic 401 to avoid enumeration."""
     email = "collision@gmail.com"
     payload1 = {**VALID_PAYLOAD, "sub": "google-uid-a", "email": email}
     payload2 = {**VALID_PAYLOAD, "sub": "google-uid-b", "email": email}
@@ -108,7 +108,30 @@ async def test_google_login_returns_409_on_email_collision(client: AsyncClient) 
     with patch("app.api.v1.auth.verify_google_credential", new=AsyncMock(return_value=payload2)):
         resp = await client.post("/api/v1/auth/google", json={"credential": "fake"})
 
-    assert resp.status_code == 409
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Authentication failed"
+
+
+@pytest.mark.asyncio
+async def test_google_login_rate_limits_repeated_attempts(client: AsyncClient) -> None:
+    from app.config import settings
+
+    with patch(
+        "app.api.v1.auth.verify_google_credential",
+        new=AsyncMock(side_effect=InvalidGoogleCredentialError("Token is invalid")),
+    ):
+        responses = [
+            await client.post("/api/v1/auth/google", json={"credential": f"bad-{index}"})
+            for index in range(settings.auth_rate_limit_max_attempts + 1)
+        ]
+
+    assert all(response.status_code == 401 for response in responses[:-1])
+    final_response = responses[-1]
+    assert final_response.status_code == 429
+    body = final_response.json()
+    assert body["detail"] == "Too many authentication attempts"
+    assert "retry_after" in body
+    assert "Retry-After" in final_response.headers
 
 
 # ── Auth guard ────────────────────────────────────────────────────────────────

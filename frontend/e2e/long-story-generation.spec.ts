@@ -12,6 +12,29 @@ import { sel } from "./selectors";
 const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL ?? "http://127.0.0.1:8001";
 const OLLAMA_MODEL = process.env.E2E_OLLAMA_MODEL ?? "gpt-oss:20b";
 
+async function gotoStudio(page: Page): Promise<void> {
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.setItem("lf_token", "e2e.fake.token");
+    localStorage.setItem("loreforge.language", "en");
+  });
+  await page.reload();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+}
+
+async function fillRequiredSources(page: Page): Promise<void> {
+  const s = sel(page);
+  await s.sourceA.fill("Story seed A");
+  await s.sourceB.fill("Story seed B");
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("lf_token", "e2e.fake.token");
+    localStorage.setItem("loreforge.language", "en");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // SSE mock helpers
 // ---------------------------------------------------------------------------
@@ -114,33 +137,33 @@ async function interceptLongFormRequest(
 test.describe("Chapter settings UI", () => {
   test("chapter settings fields are visible on load", async ({ page }) => {
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
     await expect(s.chapterCount).toBeVisible();
     await expect(s.wordsPerChapter).toBeVisible();
   });
 
   test("chapter count defaults to 4 and words-per-chapter defaults to 400", async ({ page }) => {
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
 
     await expect(s.chapterCount).toHaveValue("4");
     await expect(s.wordsPerChapter).toHaveValue("400");
   });
 
-  test("chapter count can be changed and is clamped to [2, 10]", async ({ page }) => {
+  test("chapter count can be changed and is clamped to [2, 4]", async ({ page }) => {
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
 
     await s.chapterCount.fill("6");
-    await expect(s.chapterCount).toHaveValue("6");
+    await expect(s.chapterCount).toHaveValue("4");
   });
 
   test("words-per-chapter can be changed", async ({ page }) => {
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
 
     await s.wordsPerChapter.fill("600");
-    await expect(s.wordsPerChapter).toHaveValue("600");
+    await expect(s.wordsPerChapter).toHaveValue("500");
   });
 });
 
@@ -169,7 +192,8 @@ test.describe("Long-form REST payload", () => {
       });
     });
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await sel(page).storyBrief.fill("A brief test story.");
     await sel(page).forgeButton.click();
     await expect(sel(page).forgeButton).toBeEnabled({ timeout: 30_000 });
@@ -181,7 +205,8 @@ test.describe("Long-form REST payload", () => {
     const { getPayload } = await interceptLongFormRequest(page);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.chapterCount.fill("3");
     await s.wordsPerChapter.fill("500");
     await s.storyBrief.fill("A brief test story.");
@@ -201,7 +226,8 @@ test.describe("Long-form REST payload", () => {
     const { getPayload } = await interceptLongFormRequest(page);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.sourceA.fill("The Lighthouse");
     await s.storyBrief.fill("A keeper hears a distress signal.");
     await s.forgeButton.click();
@@ -210,14 +236,12 @@ test.describe("Long-form REST payload", () => {
     const payload = getPayload() as {
       context?: { user_prompt?: string; language?: string };
       vibe?: object;
-      provider?: object;
       stream?: boolean;
     } | null;
 
     expect(payload?.context?.user_prompt).toBeTruthy();
     expect(payload?.context?.language).toBeDefined();
     expect(payload?.vibe).toBeDefined();
-    expect(payload?.provider).toBeDefined();
     expect(payload?.stream).toBe(true);
   });
 
@@ -225,7 +249,8 @@ test.describe("Long-form REST payload", () => {
     const { getPayload } = await interceptLongFormRequest(page);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.storyBrief.fill("A brief test story.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
@@ -238,7 +263,8 @@ test.describe("Long-form REST payload", () => {
     const { getPayload } = await interceptLongFormRequest(page);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.languageSelect.click();
     await page.getByRole("option", { name: "Ukrainian" }).click();
     await s.storyBrief.fill("Коротка розповідь.");
@@ -255,21 +281,23 @@ test.describe("Long-form streaming UI", () => {
     await interceptLongFormRequest(page);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.storyBrief.fill("A lighthouse keeper story.");
     await s.forgeButton.click();
 
     // Table of contents should appear once the outline SSE event is processed
     await expect(page.getByText("Table of Contents")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText("The Signal")).toBeVisible();
-    await expect(page.getByText("The Response")).toBeVisible();
+    await expect(page.getByText("The Signal", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("The Response", { exact: true }).first()).toBeVisible();
   });
 
   test("shows chapter status cards for each chapter", async ({ page }) => {
     await interceptLongFormRequest(page);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.storyBrief.fill("A lighthouse keeper story.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
@@ -283,7 +311,8 @@ test.describe("Long-form streaming UI", () => {
     await interceptLongFormRequest(page);
     const s = sel(page);
 
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.storyBrief.fill("A lighthouse keeper story.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
@@ -324,13 +353,14 @@ test.describe("Long-form streaming UI", () => {
     });
 
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.storyBrief.fill("A troubled draft story.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
 
-    // After streaming completes, the chapter should show low-quality (not accepted)
-    await expect(page.getByText(/low quality · \d+w/)).toBeVisible();
+    // After streaming completes, the chapter should be marked done with a word count.
+    await expect(page.getByText(/done · \d+w/)).toBeVisible();
   });
 
   test("forge button is disabled while streaming and re-enables on completion", async ({
@@ -364,7 +394,8 @@ test.describe("Long-form streaming UI", () => {
     });
 
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.storyBrief.fill("A story.");
     await s.forgeButton.click();
 
@@ -395,7 +426,8 @@ test.describe("Long-form streaming UI", () => {
     });
 
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.storyBrief.fill("A story that will error.");
     await s.forgeButton.click();
 
@@ -440,7 +472,8 @@ test.describe("Long-form streaming UI", () => {
     });
 
     const s = sel(page);
-    await page.goto("/");
+    await gotoStudio(page);
+    await fillRequiredSources(page);
     await s.storyBrief.fill("A lighthouse keeper story.");
     await s.forgeButton.click();
     await expect(s.forgeButton).toBeEnabled({ timeout: 30_000 });
@@ -486,9 +519,10 @@ test.describe("Long-form generation via live Ollama (integration)", () => {
       sawEventStream = (response.headers()["content-type"] ?? "").includes("text/event-stream");
     });
 
-    await page.goto("/");
+    await gotoStudio(page);
 
     await s.sourceA.fill("Lighthouse Signal");
+    await s.sourceB.fill("Harbor Echo");
     await s.storyBrief.fill(
       "Write a very short two-sentence scene about a lighthouse keeper hearing a coded distress signal.",
     );

@@ -7,11 +7,13 @@ import json
 import logging
 from collections.abc import AsyncIterator
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.domain.long_form_contracts import LongFormRequest
+from app.services.contracts import LLMGateway, OutlineAgent
 from app.services.long_form_orchestrator import LongFormOrchestrator
 from app.services.model_factory import verify_ollama_connectivity
 from app.services.outline_agent import LocalOutlineAgent, StructuredOutlineAgent
@@ -21,16 +23,34 @@ from app.api.deps import check_rate_limit
 router = APIRouter(prefix="/stories", tags=["stories"])
 logger = logging.getLogger(__name__)
 
+STREAM_FAILURES = (
+    RuntimeError,
+    ValueError,
+    TypeError,
+    OSError,
+    httpx.HTTPError,
+)
 
-def build_long_form_orchestrator() -> LongFormOrchestrator:
-    """Build a long-form orchestrator with stub or production agents."""
 
-    llm_gateway = LocalStubGateway() if settings.use_stub_llm else HybridLangChainGateway()
-    outline_agent = LocalOutlineAgent() if settings.use_stub_llm else StructuredOutlineAgent()
-    return LongFormOrchestrator(
-        llm_gateway=llm_gateway,
-        outline_agent=outline_agent,
-    )
+def get_llm_gateway() -> LLMGateway:
+    """Return the configured provider gateway for story generation."""
+
+    return LocalStubGateway() if settings.use_stub_llm else HybridLangChainGateway()
+
+
+def get_outline_agent() -> OutlineAgent:
+    """Return the configured outline agent for story generation."""
+
+    return LocalOutlineAgent() if settings.use_stub_llm else StructuredOutlineAgent()
+
+
+def get_long_form_orchestrator(
+    llm_gateway: LLMGateway = Depends(get_llm_gateway),
+    outline_agent: OutlineAgent = Depends(get_outline_agent),
+) -> LongFormOrchestrator:
+    """Assemble the story orchestrator through dependency injection."""
+
+    return LongFormOrchestrator(llm_gateway=llm_gateway, outline_agent=outline_agent)
 
 
 def _ollama_user_message() -> str:
@@ -46,11 +66,11 @@ def _ollama_user_message() -> str:
 async def generate_long_form_story(
     request: LongFormRequest,
     _rate_limit: None = Depends(check_rate_limit),
+    orchestrator: LongFormOrchestrator = Depends(get_long_form_orchestrator),
 ) -> StreamingResponse:
-    """Stream a multi-chapter story through the outline → write → critic pipeline."""
+    """Stream a multi-chapter story through the outline and chapter-writing pipeline."""
 
     logger.info("Story generation requested: chapters=%d", request.chapter_count)
-    orchestrator = build_long_form_orchestrator()
     return StreamingResponse(
         _stream_long_form_events(orchestrator.stream(request=request)),
         media_type="text/event-stream",
@@ -67,11 +87,10 @@ async def _stream_long_form_events(events: AsyncIterator[dict]) -> AsyncIterator
             data = event.get("payload", {})
             yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
         logger.info("SSE stream ended normally")
-    except Exception as error:
+    except STREAM_FAILURES:
         logger.exception("Unhandled exception while streaming long-form generation")
         payload = {
             "error": "internal_server_error",
-            "detail": str(error),
             "user_message": "Long-form story generation failed. Please retry.",
         }
         with contextlib.suppress(Exception):

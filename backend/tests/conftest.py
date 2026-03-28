@@ -9,9 +9,20 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 os.environ.setdefault("JWT_SECRET", "integration-test-secret-do-not-use-in-prod")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "integration-test-google-client-id")
 
 from app.main import create_app
 from app.persistence.db import session_factory
+from app.services.auth_rate_limit_service import reset_auth_rate_limit_state
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def reset_auth_rate_limits():
+    """Reset the in-memory auth throttle between tests."""
+
+    reset_auth_rate_limit_state()
+    yield
+    reset_auth_rate_limit_state()
 
 
 @pytest_asyncio.fixture(loop_scope="session")

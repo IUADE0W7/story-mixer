@@ -92,9 +92,6 @@ def build_chat_model() -> BaseChatModel:
         )
 
     if provider_name == "ollama":
-        # Quick connectivity check so failed Ollama connections surface immediately.
-        verify_ollama_connectivity(timeout_seconds=2)
-
         from langchain_ollama import ChatOllama
 
         return ChatOllama(

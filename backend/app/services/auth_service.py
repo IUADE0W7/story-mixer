@@ -10,13 +10,21 @@ import jwt as pyjwt
 from app.config import settings
 
 
+class InvalidGoogleCredentialError(ValueError):
+    """Raised when a Google ID token cannot be verified safely."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__("Invalid Google credential")
+        self.reason = reason
+
+
 async def verify_google_credential(credential: str) -> dict:
     """Verify a Google ID token credential. Returns decoded payload on success.
 
     Runs the blocking google-auth HTTP call in a thread pool to avoid
     blocking the asyncio event loop.
 
-    Raises ValueError on any verification failure (expired, wrong audience,
+    Raises InvalidGoogleCredentialError on any verification failure (expired, wrong audience,
     bad signature, unverified email, missing claims).
     """
     from google.auth.exceptions import GoogleAuthError
@@ -29,14 +37,14 @@ async def verify_google_credential(credential: str) -> dict:
                 credential, google_requests.Request(), settings.google_client_id
             )
         except (GoogleAuthError, ValueError) as exc:
-            raise ValueError(str(exc)) from exc
+            raise InvalidGoogleCredentialError(str(exc)) from exc
 
         if not payload.get("email_verified"):
-            raise ValueError("Google account email is not verified")
+            raise InvalidGoogleCredentialError("Google account email is not verified")
         if not payload.get("sub"):
-            raise ValueError("Google token missing subject claim")
+            raise InvalidGoogleCredentialError("Google token missing subject claim")
         if not payload.get("email"):
-            raise ValueError("Google token missing email claim")
+            raise InvalidGoogleCredentialError("Google token missing email claim")
 
         return payload
 
